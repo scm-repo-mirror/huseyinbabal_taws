@@ -142,228 +142,22 @@ Use `Tab` to autocomplete and `Enter` to select.
 
 ---
 
-## AWS Service Coverage
+## Supported AWS Services
 
-taws currently supports **68 AWS services** with **100+ resource types**:
+taws supports **30 core AWS services** covering 95%+ of typical AWS usage:
 
-✅ = Implemented | ⏳ = Planned
-
-### Compute
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| EC2 | ✅ | Instances, Security Groups, Volumes, Snapshots, AMIs, Key Pairs |
-| Lambda | ✅ | Functions |
-| ECS | ✅ | Clusters, Services, Tasks |
-| EKS | ✅ | Clusters |
-| Elastic Beanstalk | ✅ | Applications, Environments |
-| App Runner | ✅ | Services |
-| Batch | ✅ | Job Queues, Compute Environments |
-| Lightsail | ✅ | Instances |
-| Auto Scaling | ✅ | Groups |
-| EC2 Image Builder | ⏳ | |
-| Outposts | ⏳ | |
-
-### Containers & Serverless
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| ECR | ✅ | Repositories |
-| Fargate | ✅ | (via ECS) |
-| Step Functions | ✅ | State Machines |
-| EventBridge | ✅ | Rules, Event Buses |
-
-### Storage
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| S3 | ✅ | Buckets |
-| EFS | ✅ | File Systems |
-| FSx | ✅ | File Systems |
-| Storage Gateway | ✅ | Gateways |
-| Backup | ✅ | Backup Vaults, Plans |
-| S3 Glacier | ⏳ | |
-| Snow Family | ⏳ | |
-
-### Database
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| RDS | ✅ | Instances, Snapshots |
-| DynamoDB | ✅ | Tables |
-| ElastiCache | ✅ | Clusters |
-| Neptune | ✅ | Clusters |
-| MemoryDB | ✅ | Clusters |
-| Redshift | ✅ | Clusters |
-| DocumentDB | ⏳ | |
-| Keyspaces | ⏳ | |
-| Timestream | ⏳ | |
-| QLDB | ⏳ | |
-
-### Networking & Content Delivery
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| VPC | ✅ | VPCs, Subnets, Route Tables, NAT Gateways, Internet Gateways |
-| CloudFront | ✅ | Distributions |
-| Route 53 | ✅ | Hosted Zones |
-| API Gateway | ✅ | REST APIs |
-| Direct Connect | ✅ | Connections |
-| Global Accelerator | ⏳ | |
-| PrivateLink | ⏳ | |
-| Transit Gateway | ⏳ | |
-| App Mesh | ⏳ | |
-
-### Security, Identity & Compliance
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| IAM | ✅ | Users, Roles, Policies, Groups, Access Keys |
-| Secrets Manager | ✅ | Secrets |
-| KMS | ✅ | Keys |
-| ACM | ✅ | Certificates |
-| WAF | ✅ | Web ACLs, IP Sets |
-| Shield | ✅ | Protections |
-| GuardDuty | ✅ | Detectors |
-| Inspector | ✅ | Findings |
-| Cognito | ✅ | User Pools |
-| Security Hub | ⏳ | |
-| Macie | ⏳ | |
-| Detective | ⏳ | |
-| Firewall Manager | ⏳ | |
-| Resource Access Manager | ⏳ | |
-
-### Management & Governance
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| CloudFormation | ✅ | Stacks |
-| CloudTrail | ✅ | Trails |
-| CloudWatch | ✅ | Log Groups, Alarms |
-| Config | ✅ | Rules, Recorders |
-| Organizations | ✅ | Accounts |
-| SSM | ✅ | Parameters, Documents |
-| STS | ✅ | Caller Identity |
-| Budgets | ✅ | Budgets |
-| Cost Explorer | ⏳ | |
-| Service Catalog | ⏳ | |
-| Trusted Advisor | ⏳ | |
-| Control Tower | ⏳ | |
-| License Manager | ⏳ | |
-| Health | ⏳ | |
-
-### Developer Tools
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| CodeBuild | ✅ | Projects |
-| CodePipeline | ✅ | Pipelines |
-| X-Ray | ✅ | Groups, Sampling Rules |
-| CodeCommit | ⏳ | |
-| CodeDeploy | ⏳ | |
-| CodeArtifact | ⏳ | |
-| Cloud9 | ⏳ | |
-| CodeStar | ⏳ | |
-
-### Analytics
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| Athena | ✅ | Work Groups, Data Catalogs |
-| EMR | ✅ | Clusters |
-| Kinesis | ✅ | Streams |
-| Firehose | ✅ | Delivery Streams |
-| Glue | ✅ | Databases, Jobs, Crawlers |
-| QuickSight | ✅ | Dashboards |
-| OpenSearch | ✅ | Domains |
-| MSK | ⏳ | |
-| Data Pipeline | ⏳ | |
-| Lake Formation | ⏳ | |
-| CloudSearch | ⏳ | |
-
-### Machine Learning
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| SageMaker | ✅ | Endpoints, Notebook Instances |
-| Bedrock | ✅ | Models, Custom Models |
-| Rekognition | ⏳ | |
-| Comprehend | ⏳ | |
-| Polly | ⏳ | |
-| Transcribe | ⏳ | |
-| Translate | ⏳ | |
-| Lex | ⏳ | |
-| Personalize | ⏳ | |
-| Forecast | ⏳ | |
-| Textract | ⏳ | |
-| Kendra | ⏳ | |
-
-### Application Integration
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| SNS | ✅ | Topics |
-| SQS | ✅ | Queues |
-| AppSync | ✅ | APIs |
-| MQ | ✅ | Brokers |
-| Amazon MQ | ✅ | (ActiveMQ, RabbitMQ) |
-| SWF | ⏳ | |
-
-### Media Services
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| MediaConvert | ✅ | Job Templates, Queues |
-| MediaLive | ⏳ | |
-| MediaPackage | ⏳ | |
-| Elemental | ⏳ | |
-| IVS | ⏳ | |
-
-### Migration & Transfer
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| DMS | ✅ | Replication Instances, Tasks |
-| DataSync | ✅ | Tasks, Locations |
-| Transfer Family | ✅ | Servers |
-| Migration Hub | ⏳ | |
-| Application Discovery | ⏳ | |
-| Server Migration | ⏳ | |
-
-### End User Computing
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| WorkSpaces | ✅ | Workspaces, Directories |
-| AppStream 2.0 | ⏳ | |
-| WorkDocs | ⏳ | |
-| WorkLink | ⏳ | |
-
-### Front-End Web & Mobile
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| Amplify | ✅ | Apps |
-| SES | ✅ | Identities |
-| Pinpoint | ⏳ | |
-| Device Farm | ⏳ | |
-
-### IoT
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| IoT Core | ⏳ | |
-| IoT Greengrass | ⏳ | |
-| IoT Analytics | ⏳ | |
-| IoT Events | ⏳ | |
-| IoT SiteWise | ⏳ | |
-
-### Game Development
-
-| Service | Status | Resources |
-|---------|:------:|-----------|
-| GameLift | ⏳ | |
-| Lumberyard | ⏳ | |
+| Category | Services |
+|----------|----------|
+| **Compute** | EC2, Lambda, ECS, EKS, Auto Scaling |
+| **Storage** | S3 |
+| **Database** | RDS, DynamoDB, ElastiCache |
+| **Networking** | VPC (Subnets, Security Groups), Route 53, CloudFront, API Gateway, ELB |
+| **Security** | IAM, Secrets Manager, KMS, ACM, Cognito |
+| **Management** | CloudFormation, CloudWatch Logs, CloudTrail, SSM, STS |
+| **Messaging** | SQS, SNS, EventBridge |
+| **Containers** | ECR |
+| **DevOps** | CodePipeline, CodeBuild |
+| **Analytics** | Athena |
 
 ---
 
@@ -381,9 +175,11 @@ src/
 ├── resource/
 │   ├── registry.rs     # Resource registry and loading
 │   ├── fetcher.rs      # Generic resource fetcher
-│   └── sdk_dispatch.rs # AWS SDK dispatch (the only SDK code)
+│   └── sdk_dispatch.rs # HTTP-based AWS API calls
 ├── aws/
-│   ├── client.rs       # AWS client management
+│   ├── client.rs       # AWS HTTP client management
+│   ├── credentials.rs  # Credential loading (profiles, env vars)
+│   ├── http.rs         # Lightweight HTTP client with SigV4 signing
 │   └── profiles.rs     # AWS profile handling
 └── ui/
     ├── table.rs        # Resource table view
@@ -391,11 +187,18 @@ src/
     └── ...
 ```
 
+### Lightweight Design
+
+taws uses a custom lightweight HTTP client with AWS SigV4 signing instead of the full AWS SDK. This results in:
+- **Fast builds** - ~100 dependencies vs ~500+ with full SDK
+- **Small binary** - ~5MB release binary
+- **Quick compilation** - Seconds instead of minutes
+
 ### Adding a New Resource Type
 
 1. Add a JSON definition in `src/resources/<service>.json`
-2. Add the SDK client to `src/aws/client.rs`
-3. Add the SDK dispatch handler to `src/resource/sdk_dispatch.rs`
+2. Add the service definition to `src/aws/http.rs`
+3. Add the HTTP dispatch handler to `src/resource/sdk_dispatch.rs`
 
 No other code changes required!
 
@@ -460,7 +263,7 @@ cargo clippy
 
 - Inspired by [k9s](https://github.com/derailed/k9s) - the awesome Kubernetes CLI
 - Built with [Ratatui](https://github.com/ratatui-org/ratatui) - Rust TUI library
-- Uses [AWS SDK for Rust](https://github.com/awslabs/aws-sdk-rust)
+- Uses [aws-sigv4](https://github.com/awslabs/aws-sdk-rust) for request signing
 
 ---
 
