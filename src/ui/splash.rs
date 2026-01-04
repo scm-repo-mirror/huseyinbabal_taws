@@ -113,7 +113,10 @@ fn render_big_logo(f: &mut Frame, area: Rect) {
             "Terminal UI for AWS",
             Style::default().fg(Color::DarkGray),
         )),
-        Line::from(Span::styled("v0.1.0", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            crate::VERSION,
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
 
     let paragraph = Paragraph::new(logo_lines).alignment(Alignment::Center);

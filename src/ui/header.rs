@@ -244,7 +244,10 @@ fn render_logo(f: &mut Frame, area: Rect) {
             "AWS TUI",
             Style::default().fg(Color::DarkGray),
         )),
-        Line::from(Span::styled("v0.1.0", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            crate::VERSION,
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
 
     let paragraph = Paragraph::new(logo);

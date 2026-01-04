@@ -5,6 +5,13 @@ mod event;
 mod resource;
 mod ui;
 
+/// Version injected at compile time via TAWS_VERSION env var (set by CI/CD),
+/// or "dev" for local builds.
+pub const VERSION: &str = match option_env!("TAWS_VERSION") {
+    Some(v) => v,
+    None => "dev",
+};
+
 use anyhow::Result;
 use app::App;
 use clap::{Parser, ValueEnum};
