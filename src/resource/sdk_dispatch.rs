@@ -239,6 +239,42 @@ pub async fn execute_action(
             Ok(())
         }
 
+        // ELBv2 Actions
+        ("elbv2", "delete_load_balancer") => {
+            clients.http.query_request("elbv2", "DeleteLoadBalancer", &[
+                ("LoadBalancerArn", resource_id)
+            ]).await?;
+            Ok(())
+        }
+        ("elbv2", "delete_listener") => {
+            clients.http.query_request("elbv2", "DeleteListener", &[
+                ("ListenerArn", resource_id)
+            ]).await?;
+            Ok(())
+        }
+        ("elbv2", "delete_rule") => {
+            clients.http.query_request("elbv2", "DeleteRule", &[
+                ("RuleArn", resource_id)
+            ]).await?;
+            Ok(())
+        }
+        ("elbv2", "delete_target_group") => {
+            clients.http.query_request("elbv2", "DeleteTargetGroup", &[
+                ("TargetGroupArn", resource_id)
+            ]).await?;
+            Ok(())
+        }
+        ("elbv2", "deregister_targets") => {
+            // resource_id format: "target_group_arn|target_id:port"
+            // For simplicity, we'll just use the resource_id as target_group_arn for now
+            // The actual target deregistration would need more complex handling
+            clients.http.query_request("elbv2", "DeregisterTargets", &[
+                ("TargetGroupArn", resource_id),
+                ("Targets.member.1.Id", resource_id)
+            ]).await?;
+            Ok(())
+        }
+
         _ => Err(anyhow!("Unknown action: {}.{}", service, action)),
     }
 }
@@ -398,6 +434,40 @@ pub async fn describe_resource(
             ).await?;
             let json: Value = serde_json::from_str(&response)?;
             Ok(json.get("KeyMetadata").cloned().unwrap_or(json))
+        }
+        
+        "elbv2-load-balancers" => {
+            let xml = clients.http.query_request("elbv2", "DescribeLoadBalancers", &[
+                ("LoadBalancerArns.member.1", resource_id)
+            ]).await?;
+            let json = xml_to_json(&xml)?;
+            
+            if let Some(lbs) = json.pointer("/DescribeLoadBalancersResponse/DescribeLoadBalancersResult/LoadBalancers/member") {
+                let lb = match lbs {
+                    Value::Array(arr) => arr.first().cloned().unwrap_or(Value::Null),
+                    obj @ Value::Object(_) => obj.clone(),
+                    _ => Value::Null,
+                };
+                return Ok(lb);
+            }
+            Err(anyhow!("Load balancer not found"))
+        }
+        
+        "elbv2-target-groups" => {
+            let xml = clients.http.query_request("elbv2", "DescribeTargetGroups", &[
+                ("TargetGroupArns.member.1", resource_id)
+            ]).await?;
+            let json = xml_to_json(&xml)?;
+            
+            if let Some(tgs) = json.pointer("/DescribeTargetGroupsResponse/DescribeTargetGroupsResult/TargetGroups/member") {
+                let tg = match tgs {
+                    Value::Array(arr) => arr.first().cloned().unwrap_or(Value::Null),
+                    obj @ Value::Object(_) => obj.clone(),
+                    _ => Value::Null,
+                };
+                return Ok(tg);
+            }
+            Err(anyhow!("Target group not found"))
         }
         
         // Default: return an error indicating describe is not implemented
@@ -1483,6 +1553,209 @@ pub async fn invoke_sdk(
             }).collect();
             
             Ok(json!({ "work_groups": result }))
+        }
+
+        // =====================================================================
+        // ELBv2 Operations (Query protocol)
+        // =====================================================================
+        ("elbv2", "describe_load_balancers") => {
+            let xml = clients.http.query_request("elbv2", "DescribeLoadBalancers", &[]).await?;
+            let json = xml_to_json(&xml)?;
+            
+            let lbs_data = json.pointer("/DescribeLoadBalancersResponse/DescribeLoadBalancersResult/LoadBalancers/member");
+            let lb_list = match lbs_data {
+                Some(Value::Array(arr)) => arr.clone(),
+                Some(obj @ Value::Object(_)) => vec![obj.clone()],
+                _ => vec![],
+            };
+            
+            let result: Vec<Value> = lb_list.iter().map(|lb| {
+                let state = lb.pointer("/State/Code").and_then(|v| v.as_str()).unwrap_or("-");
+                json!({
+                    "LoadBalancerArn": lb.pointer("/LoadBalancerArn").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "LoadBalancerName": lb.pointer("/LoadBalancerName").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "DNSName": lb.pointer("/DNSName").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Type": lb.pointer("/Type").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Scheme": lb.pointer("/Scheme").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "State": state,
+                    "VpcId": lb.pointer("/VpcId").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "CreatedTime": lb.pointer("/CreatedTime").and_then(|v| v.as_str()).unwrap_or("-"),
+                })
+            }).collect();
+            
+            Ok(json!({ "load_balancers": result }))
+        }
+
+        ("elbv2", "describe_listeners") => {
+            let lb_arn = extract_param(params, "load_balancer_arn");
+            if lb_arn.is_empty() {
+                return Ok(json!({ "listeners": [] }));
+            }
+            
+            let xml = clients.http.query_request("elbv2", "DescribeListeners", &[
+                ("LoadBalancerArn", &lb_arn)
+            ]).await?;
+            let json = xml_to_json(&xml)?;
+            
+            let listeners_data = json.pointer("/DescribeListenersResponse/DescribeListenersResult/Listeners/member");
+            let listener_list = match listeners_data {
+                Some(Value::Array(arr)) => arr.clone(),
+                Some(obj @ Value::Object(_)) => vec![obj.clone()],
+                _ => vec![],
+            };
+            
+            let result: Vec<Value> = listener_list.iter().map(|listener| {
+                // Get the default action type
+                let default_action = listener.pointer("/DefaultActions/member")
+                    .and_then(|v| match v {
+                        Value::Array(arr) => arr.first(),
+                        obj @ Value::Object(_) => Some(obj),
+                        _ => None,
+                    })
+                    .and_then(|a| a.pointer("/Type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                
+                json!({
+                    "ListenerArn": listener.pointer("/ListenerArn").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "LoadBalancerArn": listener.pointer("/LoadBalancerArn").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Port": listener.pointer("/Port").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Protocol": listener.pointer("/Protocol").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "SslPolicy": listener.pointer("/SslPolicy").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "DefaultActionType": default_action,
+                })
+            }).collect();
+            
+            Ok(json!({ "listeners": result }))
+        }
+
+        ("elbv2", "describe_rules") => {
+            let listener_arn = extract_param(params, "listener_arn");
+            if listener_arn.is_empty() {
+                return Ok(json!({ "rules": [] }));
+            }
+            
+            let xml = clients.http.query_request("elbv2", "DescribeRules", &[
+                ("ListenerArn", &listener_arn)
+            ]).await?;
+            let json = xml_to_json(&xml)?;
+            
+            let rules_data = json.pointer("/DescribeRulesResponse/DescribeRulesResult/Rules/member");
+            let rule_list = match rules_data {
+                Some(Value::Array(arr)) => arr.clone(),
+                Some(obj @ Value::Object(_)) => vec![obj.clone()],
+                _ => vec![],
+            };
+            
+            let result: Vec<Value> = rule_list.iter().map(|rule| {
+                // Get the first action type and target group
+                let action = rule.pointer("/Actions/member")
+                    .and_then(|v| match v {
+                        Value::Array(arr) => arr.first().cloned(),
+                        obj @ Value::Object(_) => Some(obj.clone()),
+                        _ => None,
+                    });
+                let action_type = action.as_ref()
+                    .and_then(|a| a.pointer("/Type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                let target_group_arn = action.as_ref()
+                    .and_then(|a| a.pointer("/TargetGroupArn"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                
+                // Summarize conditions
+                let conditions = rule.pointer("/Conditions/member");
+                let conditions_summary = match conditions {
+                    Some(Value::Array(arr)) => {
+                        arr.iter()
+                            .filter_map(|c| c.pointer("/Field").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                    Some(obj @ Value::Object(_)) => {
+                        obj.pointer("/Field").and_then(|v| v.as_str()).unwrap_or("-").to_string()
+                    }
+                    _ => "-".to_string(),
+                };
+                
+                json!({
+                    "RuleArn": rule.pointer("/RuleArn").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Priority": rule.pointer("/Priority").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "IsDefault": if rule.pointer("/IsDefault").and_then(|v| v.as_str()) == Some("true") { "Yes" } else { "No" },
+                    "ConditionsSummary": if conditions_summary.is_empty() { "-" } else { &conditions_summary },
+                    "ActionType": action_type,
+                    "TargetGroupArn": target_group_arn,
+                })
+            }).collect();
+            
+            Ok(json!({ "rules": result }))
+        }
+
+        ("elbv2", "describe_target_groups") => {
+            let lb_arn = extract_param(params, "load_balancer_arn");
+            let mut query_params: Vec<(&str, &str)> = vec![];
+            
+            if !lb_arn.is_empty() {
+                query_params.push(("LoadBalancerArn", &lb_arn));
+            }
+            
+            let xml = clients.http.query_request("elbv2", "DescribeTargetGroups", &query_params).await?;
+            let json = xml_to_json(&xml)?;
+            
+            let tgs_data = json.pointer("/DescribeTargetGroupsResponse/DescribeTargetGroupsResult/TargetGroups/member");
+            let tg_list = match tgs_data {
+                Some(Value::Array(arr)) => arr.clone(),
+                Some(obj @ Value::Object(_)) => vec![obj.clone()],
+                _ => vec![],
+            };
+            
+            let result: Vec<Value> = tg_list.iter().map(|tg| {
+                json!({
+                    "TargetGroupArn": tg.pointer("/TargetGroupArn").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "TargetGroupName": tg.pointer("/TargetGroupName").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Protocol": tg.pointer("/Protocol").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Port": tg.pointer("/Port").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "VpcId": tg.pointer("/VpcId").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "TargetType": tg.pointer("/TargetType").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "HealthCheckPath": tg.pointer("/HealthCheckPath").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "HealthCheckProtocol": tg.pointer("/HealthCheckProtocol").and_then(|v| v.as_str()).unwrap_or("-"),
+                })
+            }).collect();
+            
+            Ok(json!({ "target_groups": result }))
+        }
+
+        ("elbv2", "describe_target_health") => {
+            let tg_arn = extract_param(params, "target_group_arn");
+            if tg_arn.is_empty() {
+                return Ok(json!({ "targets": [] }));
+            }
+            
+            let xml = clients.http.query_request("elbv2", "DescribeTargetHealth", &[
+                ("TargetGroupArn", &tg_arn)
+            ]).await?;
+            let json = xml_to_json(&xml)?;
+            
+            let targets_data = json.pointer("/DescribeTargetHealthResponse/DescribeTargetHealthResult/TargetHealthDescriptions/member");
+            let target_list = match targets_data {
+                Some(Value::Array(arr)) => arr.clone(),
+                Some(obj @ Value::Object(_)) => vec![obj.clone()],
+                _ => vec![],
+            };
+            
+            let result: Vec<Value> = target_list.iter().map(|t| {
+                json!({
+                    "TargetId": t.pointer("/Target/Id").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "Port": t.pointer("/Target/Port").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "AvailabilityZone": t.pointer("/Target/AvailabilityZone").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "HealthState": t.pointer("/TargetHealth/State").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "HealthReason": t.pointer("/TargetHealth/Reason").and_then(|v| v.as_str()).unwrap_or("-"),
+                    "HealthDescription": t.pointer("/TargetHealth/Description").and_then(|v| v.as_str()).unwrap_or("-"),
+                })
+            }).collect();
+            
+            Ok(json!({ "targets": result }))
         }
 
         // =====================================================================

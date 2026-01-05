@@ -218,20 +218,41 @@ Use `Tab` to autocomplete and `Enter` to select.
 
 ## Supported AWS Services
 
-taws supports **30 core AWS services** covering 95%+ of typical AWS usage:
+taws supports **30 AWS services** with **49 resource types** covering 95%+ of typical AWS usage:
 
-| Category | Services |
-|----------|----------|
-| **Compute** | EC2, Lambda, ECS, EKS, Auto Scaling |
-| **Storage** | S3 |
-| **Database** | RDS, DynamoDB, ElastiCache |
-| **Networking** | VPC (Subnets, Security Groups), Route 53, CloudFront, API Gateway, ELB |
-| **Security** | IAM, Secrets Manager, KMS, ACM, Cognito |
-| **Management** | CloudFormation, CloudWatch Logs, CloudTrail, SSM, STS |
-| **Messaging** | SQS, SNS, EventBridge |
-| **Containers** | ECR |
-| **DevOps** | CodePipeline, CodeBuild |
-| **Analytics** | Athena |
+| Category | Service | Resources |
+|----------|---------|-----------|
+| **Compute** | EC2 | Instances |
+| | Lambda | Functions |
+| | ECS | Clusters, Services, Tasks |
+| | EKS | Clusters |
+| | Auto Scaling | Auto Scaling Groups |
+| **Storage** | S3 | Buckets |
+| **Database** | RDS | Instances, Snapshots |
+| | DynamoDB | Tables |
+| | ElastiCache | Clusters |
+| **Networking** | VPC | VPCs, Subnets, Security Groups |
+| | ELBv2 | Load Balancers, Listeners, Rules, Target Groups, Targets |
+| | Route 53 | Hosted Zones |
+| | CloudFront | Distributions |
+| | API Gateway | REST APIs |
+| **Security** | IAM | Users, Groups, Roles, Policies, Access Keys |
+| | Secrets Manager | Secrets |
+| | KMS | Keys |
+| | ACM | Certificates |
+| | Cognito | User Pools |
+| **Management** | CloudFormation | Stacks |
+| | CloudWatch | Log Groups |
+| | CloudTrail | Trails |
+| | SSM | Parameters |
+| | STS | Caller Identity |
+| **Messaging** | SQS | Queues |
+| | SNS | Topics |
+| | EventBridge | Event Buses, Rules |
+| **Containers** | ECR | Repositories |
+| **DevOps** | CodePipeline | Pipelines |
+| | CodeBuild | Projects |
+| **Analytics** | Athena | Workgroups |
 
 > **Missing a service?** [Start a discussion](https://github.com/huseyinbabal/taws/discussions/new?category=ideas) to propose adding it!
 

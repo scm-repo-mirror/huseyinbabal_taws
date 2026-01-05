@@ -28,6 +28,7 @@ const RESOURCE_FILES: &[&str] = &[
     include_str!("../resources/ecs.json"),
     include_str!("../resources/eks.json"),
     include_str!("../resources/elasticache.json"),
+    include_str!("../resources/elbv2.json"),
     include_str!("../resources/eventbridge.json"),
     include_str!("../resources/iam.json"),
     include_str!("../resources/kms.json"),
@@ -409,5 +410,84 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn test_elbv2_load_balancers_resource_exists() {
+        let resource = get_resource("elbv2-load-balancers");
+        assert!(
+            resource.is_some(),
+            "ELBv2 load balancers resource should exist"
+        );
+
+        let resource = resource.unwrap();
+        assert_eq!(resource.display_name, "Load Balancers");
+        assert_eq!(resource.service, "elbv2");
+        assert_eq!(resource.sdk_method, "describe_load_balancers");
+    }
+
+    #[test]
+    fn test_elbv2_has_sub_resources() {
+        let resource = get_resource("elbv2-load-balancers").unwrap();
+        assert!(
+            !resource.sub_resources.is_empty(),
+            "ELBv2 load balancers should have sub-resources"
+        );
+
+        let listeners_sub = resource
+            .sub_resources
+            .iter()
+            .find(|s| s.resource_key == "elbv2-listeners");
+        assert!(
+            listeners_sub.is_some(),
+            "ELBv2 should have listeners sub-resource"
+        );
+
+        let target_groups_sub = resource
+            .sub_resources
+            .iter()
+            .find(|s| s.resource_key == "elbv2-target-groups");
+        assert!(
+            target_groups_sub.is_some(),
+            "ELBv2 should have target groups sub-resource"
+        );
+    }
+
+    #[test]
+    fn test_elbv2_listeners_has_rules_sub_resource() {
+        let resource = get_resource("elbv2-listeners").unwrap();
+
+        let rules_sub = resource
+            .sub_resources
+            .iter()
+            .find(|s| s.resource_key == "elbv2-rules");
+        assert!(
+            rules_sub.is_some(),
+            "ELBv2 listeners should have rules sub-resource"
+        );
+    }
+
+    #[test]
+    fn test_elbv2_target_groups_has_targets_sub_resource() {
+        let resource = get_resource("elbv2-target-groups").unwrap();
+
+        let targets_sub = resource
+            .sub_resources
+            .iter()
+            .find(|s| s.resource_key == "elbv2-targets");
+        assert!(
+            targets_sub.is_some(),
+            "ELBv2 target groups should have targets sub-resource"
+        );
+    }
+
+    #[test]
+    fn test_elbv2_health_color_map_exists() {
+        let health_map = get_color_map("health");
+        assert!(health_map.is_some(), "Health color map should exist");
+
+        let color = get_color_for_value("health", "healthy");
+        assert!(color.is_some(), "Should have color for 'healthy' state");
+        assert_eq!(color.unwrap(), [0, 255, 0]); // Green color
     }
 }

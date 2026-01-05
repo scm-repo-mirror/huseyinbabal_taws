@@ -1,0 +1,129 @@
+{
+  "resources": {
+    "elbv2-load-balancers": {
+      "display_name": "Load Balancers",
+      "service": "elbv2",
+      "sdk_method": "describe_load_balancers",
+      "sdk_method_params": {},
+      "response_path": "load_balancers",
+      "id_field": "LoadBalancerArn",
+      "name_field": "LoadBalancerName",
+      "is_global": false,
+      "columns": [
+        { "header": "NAME", "json_path": "LoadBalancerName", "width": 30 },
+        { "header": "TYPE", "json_path": "Type", "width": 12 },
+        { "header": "SCHEME", "json_path": "Scheme", "width": 15 },
+        { "header": "STATE", "json_path": "State", "width": 10, "color_map": "state" },
+        { "header": "DNS NAME", "json_path": "DNSName", "width": 50 },
+        { "header": "VPC", "json_path": "VpcId", "width": 23 }
+      ],
+      "sub_resources": [
+        { "shortcut": "l", "display_name": "Listeners", "resource_key": "elbv2-listeners", "parent_id_field": "LoadBalancerArn", "filter_param": "load_balancer_arn" },
+        { "shortcut": "t", "display_name": "Target Groups", "resource_key": "elbv2-target-groups", "parent_id_field": "LoadBalancerArn", "filter_param": "load_balancer_arn" }
+      ],
+      "actions": [
+        { "key": "ctrl+d", "display_name": "Delete Load Balancer", "shortcut": "ctrl+d", "sdk_method": "delete_load_balancer", "confirm": { "message": "Delete load balancer", "default_yes": false, "destructive": true } }
+      ]
+    },
+    "elbv2-listeners": {
+      "display_name": "Listeners",
+      "service": "elbv2",
+      "sdk_method": "describe_listeners",
+      "sdk_method_params": {},
+      "response_path": "listeners",
+      "id_field": "ListenerArn",
+      "name_field": "ListenerArn",
+      "is_global": false,
+      "columns": [
+        { "header": "PORT", "json_path": "Port", "width": 8 },
+        { "header": "PROTOCOL", "json_path": "Protocol", "width": 10 },
+        { "header": "SSL POLICY", "json_path": "SslPolicy", "width": 25 },
+        { "header": "DEFAULT ACTION", "json_path": "DefaultActionType", "width": 20 },
+        { "header": "ARN", "json_path": "ListenerArn", "width": 80 }
+      ],
+      "sub_resources": [
+        { "shortcut": "r", "display_name": "Rules", "resource_key": "elbv2-rules", "parent_id_field": "ListenerArn", "filter_param": "listener_arn" }
+      ],
+      "actions": [
+        { "key": "ctrl+d", "display_name": "Delete Listener", "shortcut": "ctrl+d", "sdk_method": "delete_listener", "confirm": { "message": "Delete listener", "default_yes": false, "destructive": true } }
+      ]
+    },
+    "elbv2-rules": {
+      "display_name": "Rules",
+      "service": "elbv2",
+      "sdk_method": "describe_rules",
+      "sdk_method_params": {},
+      "response_path": "rules",
+      "id_field": "RuleArn",
+      "name_field": "RuleArn",
+      "is_global": false,
+      "columns": [
+        { "header": "PRIORITY", "json_path": "Priority", "width": 10 },
+        { "header": "IS DEFAULT", "json_path": "IsDefault", "width": 12 },
+        { "header": "CONDITIONS", "json_path": "ConditionsSummary", "width": 40 },
+        { "header": "ACTION", "json_path": "ActionType", "width": 15 },
+        { "header": "TARGET GROUP", "json_path": "TargetGroupArn", "width": 60 }
+      ],
+      "sub_resources": [],
+      "actions": [
+        { "key": "ctrl+d", "display_name": "Delete Rule", "shortcut": "ctrl+d", "sdk_method": "delete_rule", "confirm": { "message": "Delete rule", "default_yes": false, "destructive": true } }
+      ]
+    },
+    "elbv2-target-groups": {
+      "display_name": "Target Groups",
+      "service": "elbv2",
+      "sdk_method": "describe_target_groups",
+      "sdk_method_params": {},
+      "response_path": "target_groups",
+      "id_field": "TargetGroupArn",
+      "name_field": "TargetGroupName",
+      "is_global": false,
+      "columns": [
+        { "header": "NAME", "json_path": "TargetGroupName", "width": 30 },
+        { "header": "PROTOCOL", "json_path": "Protocol", "width": 10 },
+        { "header": "PORT", "json_path": "Port", "width": 8 },
+        { "header": "TARGET TYPE", "json_path": "TargetType", "width": 12 },
+        { "header": "VPC", "json_path": "VpcId", "width": 23 },
+        { "header": "HEALTH CHECK", "json_path": "HealthCheckPath", "width": 25 }
+      ],
+      "sub_resources": [
+        { "shortcut": "t", "display_name": "Targets", "resource_key": "elbv2-targets", "parent_id_field": "TargetGroupArn", "filter_param": "target_group_arn" }
+      ],
+      "actions": [
+        { "key": "ctrl+d", "display_name": "Delete Target Group", "shortcut": "ctrl+d", "sdk_method": "delete_target_group", "confirm": { "message": "Delete target group", "default_yes": false, "destructive": true } }
+      ]
+    },
+    "elbv2-targets": {
+      "display_name": "Targets",
+      "service": "elbv2",
+      "sdk_method": "describe_target_health",
+      "sdk_method_params": {},
+      "response_path": "targets",
+      "id_field": "TargetId",
+      "name_field": "TargetId",
+      "is_global": false,
+      "columns": [
+        { "header": "TARGET ID", "json_path": "TargetId", "width": 25 },
+        { "header": "PORT", "json_path": "Port", "width": 8 },
+        { "header": "AZ", "json_path": "AvailabilityZone", "width": 15 },
+        { "header": "HEALTH", "json_path": "HealthState", "width": 12, "color_map": "health" },
+        { "header": "REASON", "json_path": "HealthReason", "width": 30 },
+        { "header": "DESCRIPTION", "json_path": "HealthDescription", "width": 40 }
+      ],
+      "sub_resources": [],
+      "actions": [
+        { "key": "d", "display_name": "Deregister Target", "shortcut": "d", "sdk_method": "deregister_targets", "confirm": { "message": "Deregister target from target group", "default_yes": false } }
+      ]
+    }
+  },
+  "color_maps": {
+    "health": [
+      { "value": "healthy", "color": [0, 255, 0] },
+      { "value": "unhealthy", "color": [255, 0, 0] },
+      { "value": "unused", "color": [128, 128, 128] },
+      { "value": "draining", "color": [255, 165, 0] },
+      { "value": "initial", "color": [255, 255, 0] },
+      { "value": "unavailable", "color": [128, 128, 128] }
+    ]
+  }
+}
