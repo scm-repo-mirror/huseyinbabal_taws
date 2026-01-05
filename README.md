@@ -125,13 +125,25 @@ cargo build --release
 
 ## Prerequisites
 
-- **AWS Credentials** - Configure your AWS credentials using one of:
-  - `aws configure` (AWS CLI)
-  - Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
-  - IAM roles (when running on EC2/ECS/Lambda)
-  - AWS profiles in `~/.aws/credentials`
-
+- **AWS Credentials** - See [Authentication](#authentication) section below
 - **IAM Permissions** - Your AWS user/role needs appropriate read permissions for the services you want to browse. At minimum, you'll need `Describe*` and `List*` permissions.
+
+---
+
+## Authentication
+
+taws uses a credential chain, trying each source in order:
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 | Environment Variables | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` |
+| 2 | Credentials File | `~/.aws/credentials` |
+| 3 | Config File | `~/.aws/config` |
+| 4 | IMDSv2 | EC2 instance metadata (requires IAM role attached to instance) |
+
+For local development, run `aws configure` to set up credentials.
+
+For EC2 instances, attach an IAM role with appropriate permissions to your instance. taws will automatically use IMDSv2 to fetch credentials.
 
 ---
 
@@ -260,10 +272,7 @@ taws supports **30 AWS services** with **49 resource types** covering 95%+ of ty
 
 ## Configuration
 
-taws looks for AWS credentials in the standard locations:
-- `~/.aws/credentials`
-- `~/.aws/config`
-- Environment variables
+See [Authentication](#authentication) for credential setup.
 
 ### Environment Variables
 
@@ -271,9 +280,11 @@ taws looks for AWS credentials in the standard locations:
 |----------|-------------|
 | `AWS_PROFILE` | Default AWS profile to use |
 | `AWS_REGION` | Default AWS region |
+| `AWS_DEFAULT_REGION` | Fallback region (if `AWS_REGION` not set) |
 | `AWS_ACCESS_KEY_ID` | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `AWS_SESSION_TOKEN` | AWS session token (for temporary credentials) |
+| `AWS_ENDPOINT_URL` | Custom endpoint URL (for LocalStack, etc.) |
 
 ---
 

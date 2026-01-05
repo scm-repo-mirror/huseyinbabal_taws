@@ -35,8 +35,8 @@ static IMDS_CACHE: OnceLock<std::sync::Mutex<Option<CachedImdsCredentials>>> = O
 const IMDS_ENDPOINT: &str = "http://169.254.169.254";
 /// IMDSv2 token TTL in seconds (6 hours)
 const IMDS_TOKEN_TTL: u64 = 21600;
-/// Timeout for IMDS requests (1 second - fast fail if not on EC2)
-const IMDS_TIMEOUT: Duration = Duration::from_secs(1);
+/// Timeout for IMDS requests (2 seconds - fast fail if not on EC2)
+const IMDS_TIMEOUT: Duration = Duration::from_secs(2);
 /// Refresh credentials 5 minutes before expiration
 const IMDS_REFRESH_BUFFER: Duration = Duration::from_secs(300);
 
@@ -70,9 +70,14 @@ pub fn load_credentials(profile: &str) -> Result<Credentials> {
 
     // 4. Try IMDSv2 (EC2 instance metadata) - only for default profile
     if profile == "default" {
-        if let Ok(creds) = load_from_imds() {
-            debug!("Loaded credentials from EC2 instance metadata (IMDSv2)");
-            return Ok(creds);
+        match load_from_imds() {
+            Ok(creds) => {
+                debug!("Loaded credentials from EC2 instance metadata (IMDSv2)");
+                return Ok(creds);
+            }
+            Err(e) => {
+                debug!("IMDSv2 credential loading failed: {}", e);
+            }
         }
     }
 
@@ -348,15 +353,18 @@ fn fetch_imds_credentials() -> Result<Credentials> {
         ));
     }
 
-    let role_name = role_response
+    let role_text = role_response
         .text()
-        .map_err(|e| anyhow!("Failed to read IAM role name: {}", e))?
-        .trim()
-        .to_string();
+        .map_err(|e| anyhow!("Failed to read IAM role name: {}", e))?;
 
-    if role_name.is_empty() {
-        return Err(anyhow!("No IAM role attached to this EC2 instance"));
-    }
+    // Take the first role if multiple are returned (newline-separated)
+    let role_name = role_text
+        .lines()
+        .next()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("No IAM role attached to this EC2 instance"))?
+        .to_string();
 
     debug!("Found IAM role: {}", role_name);
 
