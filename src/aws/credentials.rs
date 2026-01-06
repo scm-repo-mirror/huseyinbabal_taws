@@ -49,6 +49,27 @@ static IMDS_CACHE: OnceLock<std::sync::Mutex<Option<CachedImdsCredentials>>> = O
 /// Global cache for SSO credentials
 static SSO_CACHE: OnceLock<std::sync::Mutex<Option<CachedImdsCredentials>>> = OnceLock::new();
 
+/// Global cache for assumed role credentials (keyed by profile name)
+static ROLE_CACHE: OnceLock<std::sync::Mutex<HashMap<String, CachedImdsCredentials>>> =
+    OnceLock::new();
+
+/// Configuration for role assumption
+#[derive(Debug, Clone)]
+pub struct RoleConfig {
+    /// The ARN of the role to assume
+    pub role_arn: String,
+    /// The source profile to use for credentials
+    pub source_profile: String,
+    /// Optional external ID for cross-account access
+    pub external_id: Option<String>,
+    /// Optional role session name (defaults to "taws-session")
+    pub role_session_name: Option<String>,
+    /// Optional duration in seconds (defaults to 3600)
+    pub duration_seconds: Option<u32>,
+    /// Optional region for STS calls
+    pub region: Option<String>,
+}
+
 /// IMDSv2 metadata endpoint
 const IMDS_ENDPOINT: &str = "http://169.254.169.254";
 /// IMDSv2 token TTL in seconds (6 hours)
@@ -90,7 +111,18 @@ fn load_credentials_inner(profile: &str) -> Result<Credentials, CredentialsError
         }
     }
 
-    // 2. Check if SSO is configured for this profile - if so, prioritize SSO
+    // 2. Check if role assumption is configured for this profile
+    //    This is checked early to support cross-account access patterns
+    if get_role_config(profile).is_some() {
+        debug!(
+            "Role assumption configured for profile '{}', using AssumeRole",
+            profile
+        );
+        let mut visited = Vec::new();
+        return load_from_role_assumption(profile, &mut visited);
+    }
+
+    // 3. Check if SSO is configured for this profile - if so, prioritize SSO
     //    This ensures we don't use stale static credentials when SSO is the intended auth method
     if let Some(sso_config) = super::sso::get_sso_config(profile) {
         debug!(
@@ -115,7 +147,7 @@ fn load_credentials_inner(profile: &str) -> Result<Credentials, CredentialsError
         }
     }
 
-    // 3. Try AWS credentials file
+    // 4. Try AWS credentials file
     if let Ok(creds) = load_from_credentials_file(profile) {
         debug!(
             "Loaded credentials from credentials file for profile '{}'",
@@ -124,7 +156,7 @@ fn load_credentials_inner(profile: &str) -> Result<Credentials, CredentialsError
         return Ok(creds);
     }
 
-    // 4. Try config file with direct credentials
+    // 5. Try config file with direct credentials
     if let Ok(creds) = load_from_config_file(profile) {
         debug!(
             "Loaded credentials from config file for profile '{}'",
@@ -133,7 +165,7 @@ fn load_credentials_inner(profile: &str) -> Result<Credentials, CredentialsError
         return Ok(creds);
     }
 
-    // 5. Try IMDSv2 (EC2 instance metadata) - only for default profile
+    // 6. Try IMDSv2 (EC2 instance metadata) - only for default profile
     if profile == "default" {
         match load_from_imds() {
             Ok(creds) => {
@@ -280,6 +312,280 @@ fn load_from_config_file(profile: &str) -> Result<Credentials> {
         "No direct credentials found in config for profile '{}'",
         profile
     ))
+}
+
+// =============================================================================
+// Role Assumption Support
+// =============================================================================
+
+/// Get role configuration for a profile if it has role_arn configured
+pub fn get_role_config(profile: &str) -> Option<RoleConfig> {
+    let config_path = aws_config_dir().ok()?.join("config");
+    let content = fs::read_to_string(&config_path).ok()?;
+    let sections = parse_ini_file(&content);
+
+    let section = sections.get(profile)?;
+
+    // Must have role_arn to be a role assumption profile
+    let role_arn = section.get("role_arn")?.clone();
+
+    // source_profile is required for role assumption
+    let source_profile = section.get("source_profile")?.clone();
+
+    Some(RoleConfig {
+        role_arn,
+        source_profile,
+        external_id: section.get("external_id").cloned(),
+        role_session_name: section.get("role_session_name").cloned(),
+        duration_seconds: section.get("duration_seconds").and_then(|s| s.parse().ok()),
+        region: section.get("region").cloned(),
+    })
+}
+
+/// Load credentials by assuming a role
+fn load_from_role_assumption(
+    profile: &str,
+    visited: &mut Vec<String>,
+) -> Result<Credentials, CredentialsError> {
+    // Detect circular dependencies
+    if visited.contains(&profile.to_string()) {
+        return Err(CredentialsError::Other(anyhow!(
+            "Circular dependency detected in profile chain: {:?} -> {}",
+            visited,
+            profile
+        )));
+    }
+
+    let role_config = get_role_config(profile).ok_or_else(|| {
+        CredentialsError::Other(anyhow!(
+            "Profile '{}' does not have role_arn configured",
+            profile
+        ))
+    })?;
+
+    // Check cache first
+    let cache = ROLE_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get(profile) {
+            if cached.expiration > Instant::now() + CREDENTIAL_REFRESH_BUFFER {
+                trace!(
+                    "Using cached assumed role credentials for profile '{}'",
+                    profile
+                );
+                return Ok(cached.credentials.clone());
+            }
+        }
+    }
+
+    debug!(
+        "Assuming role {} for profile '{}' using source profile '{}'",
+        role_config.role_arn, profile, role_config.source_profile
+    );
+
+    // Add current profile to visited list for circular dependency detection
+    visited.push(profile.to_string());
+
+    // Recursively load source profile credentials
+    let source_creds = load_credentials_recursive(&role_config.source_profile, visited)?;
+
+    // Call STS AssumeRole
+    let assumed_creds = assume_role(&source_creds, &role_config)?;
+
+    // Cache the credentials
+    let cache = ROLE_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        let duration = role_config.duration_seconds.unwrap_or(3600) as u64;
+        guard.insert(
+            profile.to_string(),
+            CachedImdsCredentials {
+                credentials: assumed_creds.clone(),
+                expiration: Instant::now() + Duration::from_secs(duration),
+            },
+        );
+        debug!("Cached assumed role credentials for profile '{}'", profile);
+    }
+
+    Ok(assumed_creds)
+}
+
+/// Call STS AssumeRole API
+fn assume_role(
+    source_creds: &Credentials,
+    config: &RoleConfig,
+) -> Result<Credentials, CredentialsError> {
+    use crate::aws::http::sign_request;
+
+    let region = config.region.as_deref().unwrap_or("us-east-1");
+    let session_name = config
+        .role_session_name
+        .as_deref()
+        .unwrap_or("taws-session");
+    let duration = config.duration_seconds.unwrap_or(3600);
+
+    // Build STS AssumeRole request parameters
+    let mut params = vec![
+        ("Action", "AssumeRole"),
+        ("Version", "2011-06-15"),
+        ("RoleArn", &config.role_arn),
+        ("RoleSessionName", session_name),
+    ];
+
+    let duration_str = duration.to_string();
+    params.push(("DurationSeconds", &duration_str));
+
+    let external_id_ref;
+    if let Some(ref ext_id) = config.external_id {
+        external_id_ref = ext_id.clone();
+        params.push(("ExternalId", &external_id_ref));
+    }
+
+    // Build query string
+    let query_string: String = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let endpoint = format!("https://sts.{}.amazonaws.com/", region);
+    let url = format!("{}?{}", endpoint, query_string);
+
+    // Sign the request
+    let headers = sign_request(
+        "GET",
+        &url,
+        "sts",
+        region,
+        &source_creds.access_key_id,
+        &source_creds.secret_access_key,
+        source_creds.session_token.as_deref(),
+        None,
+        None,
+    )
+    .map_err(|e| CredentialsError::Other(anyhow!("Failed to sign AssumeRole request: {}", e)))?;
+
+    // Make the request
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| CredentialsError::Other(anyhow!("Failed to create HTTP client: {}", e)))?;
+
+    let mut request = client.get(&url);
+    for (key, value) in headers {
+        request = request.header(key, value);
+    }
+
+    let response = request
+        .send()
+        .map_err(|e| CredentialsError::Other(anyhow!("AssumeRole request failed: {}", e)))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(CredentialsError::Other(anyhow!(
+            "AssumeRole failed with status {}: {}",
+            status,
+            body
+        )));
+    }
+
+    let body = response.text().map_err(|e| {
+        CredentialsError::Other(anyhow!("Failed to read AssumeRole response: {}", e))
+    })?;
+
+    // Parse XML response
+    parse_assume_role_response(&body)
+}
+
+/// Parse STS AssumeRole XML response
+fn parse_assume_role_response(xml: &str) -> Result<Credentials, CredentialsError> {
+    // Simple XML parsing for AssumeRole response
+    // Response format:
+    // <AssumeRoleResponse>
+    //   <AssumeRoleResult>
+    //     <Credentials>
+    //       <AccessKeyId>...</AccessKeyId>
+    //       <SecretAccessKey>...</SecretAccessKey>
+    //       <SessionToken>...</SessionToken>
+    //       <Expiration>...</Expiration>
+    //     </Credentials>
+    //   </AssumeRoleResult>
+    // </AssumeRoleResponse>
+
+    fn extract_tag(xml: &str, tag: &str) -> Option<String> {
+        let start_tag = format!("<{}>", tag);
+        let end_tag = format!("</{}>", tag);
+
+        let start = xml.find(&start_tag)? + start_tag.len();
+        let end = xml.find(&end_tag)?;
+
+        if start < end {
+            Some(xml[start..end].to_string())
+        } else {
+            None
+        }
+    }
+
+    let access_key_id = extract_tag(xml, "AccessKeyId").ok_or_else(|| {
+        CredentialsError::Other(anyhow!("AccessKeyId not found in AssumeRole response"))
+    })?;
+
+    let secret_access_key = extract_tag(xml, "SecretAccessKey").ok_or_else(|| {
+        CredentialsError::Other(anyhow!("SecretAccessKey not found in AssumeRole response"))
+    })?;
+
+    let session_token = extract_tag(xml, "SessionToken");
+
+    Ok(Credentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+    })
+}
+
+/// Internal recursive credential loading (used for source_profile resolution)
+fn load_credentials_recursive(
+    profile: &str,
+    visited: &mut Vec<String>,
+) -> Result<Credentials, CredentialsError> {
+    // 1. Check if this profile has role_arn - if so, it needs role assumption
+    if get_role_config(profile).is_some() {
+        return load_from_role_assumption(profile, visited);
+    }
+
+    // 2. Try SSO first if configured
+    if let Some(sso_config) = super::sso::get_sso_config(profile) {
+        match load_from_sso(profile) {
+            Ok(creds) => return Ok(creds),
+            Err(_) => {
+                return Err(CredentialsError::SsoLoginRequired {
+                    profile: profile.to_string(),
+                    sso_session: sso_config.sso_session,
+                });
+            }
+        }
+    }
+
+    // 3. Try credentials file
+    if let Ok(creds) = load_from_credentials_file(profile) {
+        return Ok(creds);
+    }
+
+    // 4. Try config file
+    if let Ok(creds) = load_from_config_file(profile) {
+        return Ok(creds);
+    }
+
+    // 5. Try environment (for default profile)
+    if profile == "default" {
+        if let Ok(creds) = load_from_env() {
+            return Ok(creds);
+        }
+    }
+
+    Err(CredentialsError::Other(anyhow!(
+        "No credentials found for source profile '{}'",
+        profile
+    )))
 }
 
 // =============================================================================

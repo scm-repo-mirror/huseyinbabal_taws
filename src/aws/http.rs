@@ -913,3 +913,86 @@ pub fn xml_to_json(xml: &str) -> Result<serde_json::Value> {
 
     Ok(Value::Object(root_map))
 }
+
+/// Sign an AWS request and return the headers to add
+/// This is used for credential providers that need to make signed requests
+/// without the full AwsHttpClient setup (e.g., STS AssumeRole during credential chain)
+pub fn sign_request(
+    method: &str,
+    url: &str,
+    service: &str,
+    region: &str,
+    access_key_id: &str,
+    secret_access_key: &str,
+    session_token: Option<&str>,
+    body: Option<&str>,
+    extra_headers: Option<&[(&str, &str)]>,
+) -> Result<Vec<(String, String)>> {
+    // Parse URL to get host and path
+    let parsed_url = url::Url::parse(url)?;
+    let host = parsed_url.host_str().ok_or_else(|| anyhow!("Invalid URL: no host"))?;
+    
+    // Build path with query string
+    let path_and_query = if let Some(query) = parsed_url.query() {
+        format!("{}?{}", parsed_url.path(), query)
+    } else {
+        parsed_url.path().to_string()
+    };
+    
+    // Build headers
+    let mut headers = vec![
+        ("host".to_string(), host.to_string()),
+    ];
+    
+    if let Some(extra) = extra_headers {
+        for (k, v) in extra {
+            headers.push((k.to_lowercase(), v.to_string()));
+        }
+    }
+    
+    // Create identity for signing
+    let creds = aws_credential_types::Credentials::new(
+        access_key_id,
+        secret_access_key,
+        session_token.map(|s| s.to_string()),
+        None,
+        "taws",
+    );
+    let identity: Identity = creds.into();
+    
+    // Create signing params
+    let signing_params = SigningParams::builder()
+        .identity(&identity)
+        .region(region)
+        .name(service)
+        .time(SystemTime::now())
+        .settings(SigningSettings::default())
+        .build()?
+        .into();
+    
+    // Create signable request
+    let body_content = body.unwrap_or("");
+    let signable_body = if body_content.is_empty() {
+        SignableBody::Bytes(&[])
+    } else {
+        SignableBody::Bytes(body_content.as_bytes())
+    };
+    
+    let signable_request = SignableRequest::new(
+        method,
+        &path_and_query,
+        headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+        signable_body,
+    )?;
+    
+    // Sign the request
+    let (signing_instructions, _signature) = sign(signable_request, &signing_params)?.into_parts();
+    
+    // Collect all headers (original + signing)
+    let mut result_headers = headers;
+    for (name, value) in signing_instructions.headers() {
+        result_headers.push((name.to_string(), value.to_string()));
+    }
+    
+    Ok(result_headers)
+}
