@@ -9,7 +9,36 @@ permissions:
   contents: write
 
 jobs:
+  version-check:
+    name: Verify Version Match
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check version match
+        run: |
+          # Get version from tag (remove 'v' prefix)
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          
+          # Get version from Cargo.toml
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo.toml version: $CARGO_VERSION"
+          
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "❌ Version mismatch!"
+            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            echo ""
+            echo "Please update Cargo.toml version to $TAG_VERSION before creating the release tag."
+            exit 1
+          fi
+          
+          echo "✅ Versions match!"
+
   build-linux:
+    needs: version-check
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -49,6 +78,7 @@ jobs:
           path: taws-${{ matrix.target }}.tar.gz
 
   build-macos:
+    needs: version-check
     runs-on: macos-latest
     strategy:
       matrix:
@@ -81,6 +111,7 @@ jobs:
           path: taws-${{ matrix.target }}.tar.gz
 
   build-windows:
+    needs: version-check
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -142,20 +173,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Update version from tag
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
-          cargo generate-lockfile
-
-      - name: Commit version update
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore: bump version to ${GITHUB_REF#refs/tags/v}" || true
-          git push origin HEAD:master
 
       - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
