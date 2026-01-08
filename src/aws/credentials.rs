@@ -46,8 +46,8 @@ struct CachedImdsCredentials {
 /// Global cache for IMDS credentials
 static IMDS_CACHE: OnceLock<std::sync::Mutex<Option<CachedImdsCredentials>>> = OnceLock::new();
 
-/// Global cache for SSO credentials
-static SSO_CACHE: OnceLock<std::sync::Mutex<Option<CachedImdsCredentials>>> = OnceLock::new();
+/// Global cache for SSO credentials (keyed by profile name)
+static SSO_CACHE: OnceLock<std::sync::Mutex<HashMap<String, CachedImdsCredentials>>> = OnceLock::new();
 
 /// IMDSv2 metadata endpoint
 const IMDS_ENDPOINT: &str = "http://169.254.169.254";
@@ -291,13 +291,13 @@ fn load_from_config_file(profile: &str) -> Result<Credentials> {
 fn load_from_sso(profile: &str) -> Result<Credentials> {
     use super::sso;
 
-    // Check credential cache first
-    let cache = SSO_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    // Check credential cache first (keyed by profile)
+    let cache = SSO_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
 
     if let Ok(guard) = cache.lock() {
-        if let Some(ref cached) = *guard {
+        if let Some(cached) = guard.get(profile) {
             if cached.expiration > Instant::now() + CREDENTIAL_REFRESH_BUFFER {
-                trace!("Using cached SSO credentials");
+                trace!("Using cached SSO credentials for profile '{}'", profile);
                 return Ok(cached.credentials.clone());
             }
         }
@@ -318,15 +318,18 @@ fn load_from_sso(profile: &str) -> Result<Credentials> {
     // Exchange token for credentials
     let credentials = sso::get_role_credentials(&sso_config, &access_token)?;
 
-    // Cache the credentials
+    // Cache the credentials (keyed by profile)
     let expiration = Instant::now() + Duration::from_secs(3600); // Default 1 hour
-    let cache = SSO_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    let cache = SSO_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     if let Ok(mut guard) = cache.lock() {
-        *guard = Some(CachedImdsCredentials {
-            credentials: credentials.clone(),
-            expiration,
-        });
-        debug!("Cached SSO credentials");
+        guard.insert(
+            profile.to_string(),
+            CachedImdsCredentials {
+                credentials: credentials.clone(),
+                expiration,
+            },
+        );
+        debug!("Cached SSO credentials for profile '{}'", profile);
     }
 
     Ok(credentials)
@@ -595,4 +598,103 @@ pub fn is_imds_available() -> bool {
         .send()
         .map(|r| r.status().is_success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sso_cache_is_profile_aware() {
+        // This test verifies that SSO credentials are cached per-profile,
+        // not globally. This is a regression test for the bug where switching
+        // profiles would return cached credentials from the previous profile.
+
+        let cache = SSO_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
+        // Create credentials for two different profiles
+        let creds_profile_a = Credentials {
+            access_key_id: "AKIAPROFILE_A_KEY".to_string(),
+            secret_access_key: "secret_a".to_string(),
+            session_token: Some("token_a".to_string()),
+        };
+        let creds_profile_b = Credentials {
+            access_key_id: "AKIAPROFILE_B_KEY".to_string(),
+            secret_access_key: "secret_b".to_string(),
+            session_token: Some("token_b".to_string()),
+        };
+
+        let expiration = Instant::now() + Duration::from_secs(3600);
+
+        // Cache credentials for both profiles
+        {
+            let mut guard = cache.lock().unwrap();
+            guard.insert(
+                "profile-a".to_string(),
+                CachedImdsCredentials {
+                    credentials: creds_profile_a.clone(),
+                    expiration,
+                },
+            );
+            guard.insert(
+                "profile-b".to_string(),
+                CachedImdsCredentials {
+                    credentials: creds_profile_b.clone(),
+                    expiration,
+                },
+            );
+        }
+
+        // Verify that looking up profile-a returns profile-a's credentials
+        {
+            let guard = cache.lock().unwrap();
+            let cached_a = guard.get("profile-a").unwrap();
+            assert_eq!(
+                cached_a.credentials.access_key_id, "AKIAPROFILE_A_KEY",
+                "Profile A should return Profile A's credentials"
+            );
+        }
+
+        // Verify that looking up profile-b returns profile-b's credentials (not profile-a's)
+        {
+            let guard = cache.lock().unwrap();
+            let cached_b = guard.get("profile-b").unwrap();
+            assert_eq!(
+                cached_b.credentials.access_key_id, "AKIAPROFILE_B_KEY",
+                "Profile B should return Profile B's credentials, not Profile A's"
+            );
+        }
+
+        // Verify that a non-existent profile returns None
+        {
+            let guard = cache.lock().unwrap();
+            assert!(
+                guard.get("profile-c").is_none(),
+                "Non-existent profile should not return cached credentials"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_ini_file() {
+        let content = r#"
+[default]
+aws_access_key_id = AKIADEFAULT
+aws_secret_access_key = secret_default
+
+[profile dev]
+aws_access_key_id = AKIADEV
+aws_secret_access_key = secret_dev
+"#;
+        let sections = parse_ini_file(content);
+
+        assert!(sections.contains_key("default"));
+        assert!(sections.contains_key("dev")); // "profile " prefix stripped
+
+        let default_section = sections.get("default").unwrap();
+        assert_eq!(
+            default_section.get("aws_access_key_id").unwrap(),
+            "AKIADEFAULT"
+        );
+    }
 }
