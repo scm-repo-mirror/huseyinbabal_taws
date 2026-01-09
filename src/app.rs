@@ -7,6 +7,7 @@ use crate::resource::{
     fetch_resources_paginated, extract_json_value,
 };
 use anyhow::Result;
+use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -498,24 +499,25 @@ impl App {
 
     /// Apply text filter to items
     pub fn apply_filter(&mut self) {
-        let filter = self.filter_text.to_lowercase();
+        let query = self.filter_text.trim();
 
-        if filter.is_empty() {
+        if query.is_empty() {
             self.filtered_items = self.items.clone();
         } else {
+            let matcher = SkimMatcherV2::default().ignore_case();
             let resource = self.current_resource();
             self.filtered_items = self
                 .items
                 .iter()
                 .filter(|item| {
-                    // Search in name field and id field
                     if let Some(res) = resource {
-                        let name = extract_json_value(item, &res.name_field).to_lowercase();
-                        let id = extract_json_value(item, &res.id_field).to_lowercase();
-                        name.contains(&filter) || id.contains(&filter)
+                        let name = extract_json_value(item, &res.name_field);
+                        let id = extract_json_value(item, &res.id_field);
+                        matcher.fuzzy_match(&name, query).is_some()
+                            || matcher.fuzzy_match(&id, query).is_some()
                     } else {
                         // Fallback: search in JSON string
-                        item.to_string().to_lowercase().contains(&filter)
+                        matcher.fuzzy_match(&item.to_string(), query).is_some()
                     }
                 })
                 .cloned()
