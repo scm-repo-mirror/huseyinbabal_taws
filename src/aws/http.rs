@@ -13,6 +13,8 @@ use tracing::{debug, trace, warn};
 
 use super::credentials::Credentials;
 
+const EUSC_PREFIX: &str = "eusc-";
+
 /// Extract region from S3 URL patterns like:
 /// - https://bucket.s3.us-west-1.amazonaws.com/
 /// - https://bucket.s3-us-west-1.amazonaws.com/
@@ -26,7 +28,7 @@ fn extract_region_from_s3_url(url: &str) -> Option<String> {
             let after_prefix = &url_lower[pos + prefix.len()..];
             // Region format: xx-xxxx-N (e.g., us-west-1, eu-central-1, ap-southeast-2)
                 if let Some(end) = after_prefix.find(".amazonaws.") {
-                let region = &after_prefix[..end];
+                    let region = &after_prefix[..end];
                 // Validate it looks like a region (contains at least one hyphen and ends with digit)
                 if region.contains('-')
                     && region
@@ -369,33 +371,56 @@ impl AwsHttpClient {
         self.credentials = credentials;
     }
 
-    /// Get the endpoint URL for a service
-    fn get_endpoint(&self, service: &ServiceDefinition) -> String {
-        // If custom endpoint is set, use it for ALL services (LocalStack, etc.)
-        if let Some(ref endpoint) = self.endpoint_url {
-            return endpoint.clone();
-        }
-
-        let region = if service.is_global {
-            "us-east-1"
+    /// Determine which region should be used for a service (handles global services in ESC)
+    fn effective_region<'a>(&'a self, service: &ServiceDefinition) -> &'a str {
+        if service.is_global {
+            if self.region.starts_with(EUSC_PREFIX) {
+                &self.region
+            } else {
+                "us-east-1"
+            }
         } else {
             &self.region
+        }
+    }
+
+    /// Get the endpoint URL for a service, validating partition support when needed
+    fn get_endpoint(&self, service: &ServiceDefinition) -> Result<String> {
+        // If custom endpoint is set, use it for ALL services (LocalStack, etc.)
+        if let Some(ref endpoint) = self.endpoint_url {
+            return Ok(endpoint.clone());
+        }
+
+        let region = self.effective_region(service);
+        let domain = if service.is_global {
+            // Sovereign/global services should mirror the selected region's domain
+            Self::endpoint_domain(&self.region)
+        } else {
+            Self::endpoint_domain(region)
         };
-        let domain = Self::endpoint_domain(region);
 
         // Special case for S3
         if service.signing_name == "s3" {
-            return format!("https://s3.{}.{}", region, domain);
+            return Ok(format!("https://s3.{}.{}", region, domain));
         }
 
         // Special case for global services
         if service.is_global {
-            match service.signing_name {
-                "iam" => return "https://iam.amazonaws.com".to_string(),
-                "route53" => return "https://route53.amazonaws.com".to_string(),
-                "cloudfront" => return "https://cloudfront.amazonaws.com".to_string(),
-                _ => {}
-            }
+            return match service.signing_name {
+                "iam" => {
+                    if domain == "amazonaws.eu" {
+                        Ok(format!("https://iam.{}.{}", self.region, domain))
+                    } else {
+                        Ok("https://iam.amazonaws.com".to_string())
+                    }
+                }
+                "cloudfront" if self.region.starts_with(EUSC_PREFIX) => Err(anyhow!(
+                    "Service 'cloudfront' is not available yet in ESC regions"
+                )),
+                "cloudfront" => Ok(format!("https://cloudfront.{}", domain)),
+                "route53" => Ok(format!("https://route53.{}", domain)),
+                _ => Ok(format!("https://{}.{}", service.endpoint_prefix, domain)),
+            };
         }
 
         format!(
@@ -406,7 +431,7 @@ impl AwsHttpClient {
 
     /// Determine the endpoint domain for a region (standard vs. sovereign)
     fn endpoint_domain(region: &str) -> &'static str {
-        if region.starts_with("eusc-") {
+        if region.starts_with(EUSC_PREFIX) {
             "amazonaws.eu"
         } else {
             "amazonaws.com"
@@ -426,7 +451,7 @@ impl AwsHttpClient {
         let service = get_service(service_name)
             .ok_or_else(|| anyhow!("Unknown service: {}", service_name))?;
 
-        let endpoint = self.get_endpoint(&service);
+        let endpoint = self.get_endpoint(&service)?;
         debug!("Endpoint: {}", endpoint);
 
         // Build query string
@@ -464,7 +489,7 @@ impl AwsHttpClient {
         let service = get_service(service_name)
             .ok_or_else(|| anyhow!("Unknown service: {}", service_name))?;
 
-        let endpoint = self.get_endpoint(&service);
+        let endpoint = self.get_endpoint(&service)?;
         let url = format!("{}/", endpoint);
         debug!("Endpoint: {}", endpoint);
 
@@ -502,7 +527,7 @@ impl AwsHttpClient {
         let service = get_service(service_name)
             .ok_or_else(|| anyhow!("Unknown service: {}", service_name))?;
 
-        let endpoint = self.get_endpoint(&service);
+        let endpoint = self.get_endpoint(&service)?;
         let url = format!("{}{}", endpoint, path);
         debug!("URL: {}", url);
 
@@ -531,7 +556,7 @@ impl AwsHttpClient {
         let service = get_service(service_name)
             .ok_or_else(|| anyhow!("Unknown service: {}", service_name))?;
 
-        let endpoint = self.get_endpoint(&service);
+        let endpoint = self.get_endpoint(&service)?;
         let url = format!("{}{}", endpoint, path);
         debug!("URL: {}", url);
 
@@ -581,7 +606,7 @@ impl AwsHttpClient {
         // Use HEAD request to any S3 endpoint - AWS returns x-amz-bucket-region header
         // even for 301/400 responses, which tells us the correct region
         let mut domain_candidates = vec!["amazonaws.com"];
-        if self.region.starts_with("eusc-") {
+        if self.region.starts_with(EUSC_PREFIX) {
             domain_candidates.insert(0, "amazonaws.eu");
         }
 
@@ -640,7 +665,7 @@ impl AwsHttpClient {
         }
 
         // Default to currently selected region for sovereign clouds, otherwise us-east-1
-        if self.region.starts_with("eusc-") {
+        if self.region.starts_with(EUSC_PREFIX) {
             debug!("Bucket {} defaulting to current region {}", bucket, self.region);
             Ok(self.region.clone())
         } else {
@@ -658,11 +683,7 @@ impl AwsHttpClient {
         body: &str,
         extra_headers: Option<HashMap<String, String>>,
     ) -> Result<String> {
-        let region = if service.is_global {
-            "us-east-1"
-        } else {
-            &self.region
-        };
+        let region = self.effective_region(service);
 
         // Parse URL
         let parsed_url = url::Url::parse(url)?;
@@ -934,7 +955,6 @@ pub fn xml_to_json(xml: &str) -> Result<serde_json::Value> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
     use serde_json::{Map, Value};
-
     fn parse_element(reader: &mut Reader<&[u8]>) -> Result<Value> {
         let mut map: Map<String, Value> = Map::new();
         let mut buf = Vec::new();
@@ -1008,4 +1028,72 @@ pub fn xml_to_json(xml: &str) -> Result<serde_json::Value> {
     }
 
     Ok(Value::Object(root_map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_service, AwsHttpClient, Credentials};
+
+    fn dummy_credentials() -> Credentials {
+        Credentials {
+            access_key_id: "TESTACCESSKEY".to_string(),
+            secret_access_key: "TESTSECRETKEY".to_string(),
+            session_token: None,
+        }
+    }
+
+    fn client_with_region(region: &str) -> AwsHttpClient {
+        AwsHttpClient::new(dummy_credentials(), region, None)
+    }
+
+    #[test]
+    fn route53_uses_partition_domain_in_esc() {
+        let client = client_with_region("eusc-de-east-1");
+        let service = get_service("route53").expect("route53 service definition");
+        let endpoint = client.get_endpoint(&service).expect("route53 endpoint");
+        assert_eq!(endpoint, "https://route53.amazonaws.eu");
+    }
+
+    #[test]
+    fn route53_uses_standard_domain_elsewhere() {
+        let client = client_with_region("us-west-2");
+        let service = get_service("route53").expect("route53 service definition");
+        let endpoint = client.get_endpoint(&service).expect("route53 endpoint");
+        assert_eq!(endpoint, "https://route53.amazonaws.com");
+    }
+
+    #[test]
+    fn iam_includes_region_for_esc() {
+        let client = client_with_region("eusc-de-east-1");
+        let service = get_service("iam").expect("iam service definition");
+        let endpoint = client.get_endpoint(&service).expect("iam endpoint");
+        assert_eq!(endpoint, "https://iam.eusc-de-east-1.amazonaws.eu");
+    }
+
+    #[test]
+    fn iam_uses_classic_endpoint_for_standard_regions() {
+        let client = client_with_region("us-west-2");
+        let service = get_service("iam").expect("iam service definition");
+        let endpoint = client.get_endpoint(&service).expect("iam endpoint");
+        assert_eq!(endpoint, "https://iam.amazonaws.com");
+    }
+
+    #[test]
+    fn cloudfront_returns_not_available_error_in_esc() {
+        let client = client_with_region("eusc-de-east-1");
+        let service = get_service("cloudfront").expect("cloudfront service definition");
+        let err = client.get_endpoint(&service).expect_err("cloudfront should error in esc");
+        assert_eq!(
+            err.to_string(),
+            "Service 'cloudfront' is not available yet in ESC regions"
+        );
+    }
+
+    #[test]
+    fn cloudfront_works_in_standard_regions() {
+        let client = client_with_region("us-east-1");
+        let service = get_service("cloudfront").expect("cloudfront service definition");
+        let endpoint = client.get_endpoint(&service).expect("cloudfront endpoint");
+        assert_eq!(endpoint, "https://cloudfront.amazonaws.com");
+    }
 }
