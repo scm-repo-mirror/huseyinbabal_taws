@@ -52,6 +52,11 @@ pub struct ApiConfig {
     #[serde(default)]
     pub protocol: ApiProtocol,
 
+    /// Override the service name for API calls (e.g., "events" instead of "eventbridge")
+    /// If not specified, uses the resource's service field
+    #[serde(default)]
+    pub service_name: Option<String>,
+
     /// Action name (for Query/JSON protocols, e.g., "DescribeInstances")
     #[serde(default)]
     pub action: Option<String>,
@@ -79,6 +84,11 @@ pub struct ApiConfig {
     /// Static parameters to always include in the request
     #[serde(default)]
     pub static_params: HashMap<String, Value>,
+
+    /// Map filter parameter names to API parameter names
+    /// e.g., {"log_group_name": "logGroupName"}
+    #[serde(default)]
+    pub param_mapping: HashMap<String, String>,
 
     /// Pagination configuration
     #[serde(default)]

@@ -44,11 +44,17 @@ pub async fn invoke_data_driven(
     // Get the appropriate protocol handler
     let handler = get_protocol_handler(api_config.protocol);
 
+    // Use service_name override from api_config if specified, otherwise use resource's service
+    let service = api_config
+        .service_name
+        .as_deref()
+        .unwrap_or(&resource_def.service);
+
     // Execute the API call and parse response
     let parsed = handler
         .invoke(
             clients,
-            &resource_def.service,
+            service,
             api_config,
             params,
             &resource_def.field_mappings,
@@ -117,5 +123,53 @@ mod tests {
         // Secrets Manager should use data-driven dispatch after migration
         let result = supports_data_driven("secretsmanager-secrets");
         assert!(result, "Secrets Manager should use data-driven dispatch");
+    }
+
+    #[test]
+    fn test_ssm_parameters_uses_data_driven() {
+        let result = supports_data_driven("ssm-parameters");
+        assert!(result, "SSM parameters should use data-driven dispatch");
+    }
+
+    #[test]
+    fn test_ecr_repositories_uses_data_driven() {
+        let result = supports_data_driven("ecr-repositories");
+        assert!(result, "ECR repositories should use data-driven dispatch");
+    }
+
+    #[test]
+    fn test_acm_certificates_uses_data_driven() {
+        let result = supports_data_driven("acm-certificates");
+        assert!(result, "ACM certificates should use data-driven dispatch");
+    }
+
+    #[test]
+    fn test_eventbridge_rules_uses_data_driven() {
+        let result = supports_data_driven("eventbridge-rules");
+        assert!(result, "EventBridge rules should use data-driven dispatch");
+    }
+
+    #[test]
+    fn test_eventbridge_buses_uses_data_driven() {
+        let result = supports_data_driven("eventbridge-buses");
+        assert!(result, "EventBridge buses should use data-driven dispatch");
+    }
+
+    #[test]
+    fn test_cloudwatch_log_groups_uses_data_driven() {
+        let result = supports_data_driven("cloudwatch-log-groups");
+        assert!(
+            result,
+            "CloudWatch log groups should use data-driven dispatch"
+        );
+    }
+
+    #[test]
+    fn test_cloudwatch_log_streams_uses_data_driven() {
+        let result = supports_data_driven("cloudwatch-log-streams");
+        assert!(
+            result,
+            "CloudWatch log streams should use data-driven dispatch"
+        );
     }
 }

@@ -39,7 +39,13 @@ impl JsonProtocolHandler {
         if let Value::Object(map) = params {
             for (key, value) in map {
                 if !key.starts_with('_') {
-                    body.insert(key.clone(), value.clone());
+                    // Apply param_mapping if defined (e.g., "log_group_name" -> "logGroupName")
+                    let mapped_key = config
+                        .param_mapping
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| key.clone());
+                    body.insert(mapped_key, value.clone());
                 }
             }
         }
