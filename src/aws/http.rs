@@ -634,7 +634,7 @@ impl AwsHttpClient {
                     debug!(
                         "Bucket {} is in region {} (from x-amz-bucket-region header)",
                         bucket, region_str
-                    )
+                    );
                     return Ok(region_str.to_string());
                 }
             }
