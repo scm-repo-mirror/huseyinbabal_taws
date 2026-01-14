@@ -46,23 +46,31 @@ impl QueryProtocolHandler {
                     continue;
                 }
 
+                // Apply param_mapping if defined (e.g., "user_name" -> "UserName")
+                let mapped_key = config
+                    .param_mapping
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| key.clone());
+
                 match value {
                     Value::String(s) => {
-                        query_params.push((key.clone(), s.clone()));
+                        query_params.push((mapped_key, s.clone()));
                     }
                     Value::Array(arr) => {
                         // Handle array params (e.g., InstanceId.1, InstanceId.2)
                         for (i, item) in arr.iter().enumerate() {
                             if let Some(s) = item.as_str() {
-                                query_params.push((format!("{}.{}", key, i + 1), s.to_string()));
+                                query_params
+                                    .push((format!("{}.{}", mapped_key, i + 1), s.to_string()));
                             }
                         }
                     }
                     Value::Number(n) => {
-                        query_params.push((key.clone(), n.to_string()));
+                        query_params.push((mapped_key, n.to_string()));
                     }
                     Value::Bool(b) => {
-                        query_params.push((key.clone(), b.to_string()));
+                        query_params.push((mapped_key, b.to_string()));
                     }
                     _ => {}
                 }

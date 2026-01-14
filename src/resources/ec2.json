@@ -24,7 +24,22 @@
         { "key": "S", "display_name": "Stop", "shortcut": "S", "sdk_method": "stop_instance", "confirm": { "message": "Stop instance", "default_yes": false } },
         { "key": "r", "display_name": "Reboot", "shortcut": "r", "sdk_method": "reboot_instance", "confirm": { "message": "Reboot instance", "default_yes": false } },
         { "key": "ctrl+d", "display_name": "Terminate", "shortcut": "ctrl+d", "sdk_method": "terminate_instance", "confirm": { "message": "Terminate instance", "default_yes": false, "destructive": true } }
-      ]
+      ],
+      "api_config": {
+        "protocol": "query",
+        "action": "DescribeInstances",
+        "response_root": "/DescribeInstancesResponse/reservationSet/item/instancesSet/item"
+      },
+      "field_mappings": {
+        "InstanceId": { "source": "/instanceId", "default": "-" },
+        "InstanceType": { "source": "/instanceType", "default": "-" },
+        "State": { "source": "/instanceState/name", "default": "-" },
+        "AvailabilityZone": { "source": "/placement/availabilityZone", "default": "-" },
+        "PublicIpAddress": { "source": "/ipAddress", "default": "-" },
+        "PrivateIpAddress": { "source": "/privateIpAddress", "default": "-" },
+        "LaunchTime": { "source": "/launchTime", "default": "-" },
+        "Tags": { "source": "/tagSet/item", "transform": "tags_to_map" }
+      }
     }
   }
 }

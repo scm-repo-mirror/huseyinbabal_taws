@@ -15,7 +15,15 @@
       "sub_resources": [],
       "actions": [
         { "key": "ctrl+d", "display_name": "Delete Topic", "shortcut": "ctrl+d", "sdk_method": "delete_topic", "confirm": { "message": "Delete SNS topic", "default_yes": false, "destructive": true } }
-      ]
+      ],
+      "api_config": {
+        "protocol": "query",
+        "action": "ListTopics",
+        "response_root": "/ListTopicsResponse/ListTopicsResult/Topics/member"
+      },
+      "field_mappings": {
+        "TopicArn": { "source": "/TopicArn", "default": "-" }
+      }
     }
   }
 }

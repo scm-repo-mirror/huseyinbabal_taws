@@ -67,7 +67,20 @@ fn apply_transform(value: &Value, transform: &str) -> Value {
         "bool_to_yes_no" => transform_bool_to_yes_no(value),
         "array_to_csv" => transform_array_to_csv(value),
         "first_item" => transform_first_item(value),
+        "private_zone_to_type" => transform_private_zone_to_type(value),
         _ => value.clone(),
+    }
+}
+
+/// Transform Route53 PrivateZone boolean to "Public"/"Private"
+fn transform_private_zone_to_type(value: &Value) -> Value {
+    match value {
+        Value::Bool(b) => Value::String(if *b { "Private" } else { "Public" }.to_string()),
+        Value::String(s) => {
+            let is_private = s == "true" || s == "True" || s == "TRUE";
+            Value::String(if is_private { "Private" } else { "Public" }.to_string())
+        }
+        _ => Value::String("Public".to_string()),
     }
 }
 

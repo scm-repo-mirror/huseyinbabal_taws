@@ -24,7 +24,20 @@
         { "key": "S", "display_name": "Stop", "shortcut": "S", "sdk_method": "stop_db_instance", "confirm": { "message": "Stop RDS instance", "default_yes": false } },
         { "key": "r", "display_name": "Reboot", "shortcut": "r", "sdk_method": "reboot_db_instance", "confirm": { "message": "Reboot RDS instance", "default_yes": false } },
         { "key": "ctrl+d", "display_name": "Delete", "shortcut": "ctrl+d", "sdk_method": "delete_db_instance", "confirm": { "message": "Delete RDS instance", "default_yes": false, "destructive": true } }
-      ]
+      ],
+      "api_config": {
+        "protocol": "query",
+        "action": "DescribeDBInstances",
+        "response_root": "/DescribeDBInstancesResponse/DescribeDBInstancesResult/DBInstances/DBInstance"
+      },
+      "field_mappings": {
+        "DBInstanceIdentifier": { "source": "/DBInstanceIdentifier", "default": "-" },
+        "DBInstanceStatus": { "source": "/DBInstanceStatus", "default": "-" },
+        "Engine": { "source": "/Engine", "default": "-" },
+        "DBInstanceClass": { "source": "/DBInstanceClass", "default": "-" },
+        "AvailabilityZone": { "source": "/AvailabilityZone", "default": "-" },
+        "Endpoint": { "source": "/Endpoint/Address", "default": "-" }
+      }
     },
     "rds-snapshots": {
       "display_name": "RDS Snapshots",
@@ -46,7 +59,24 @@
       "sub_resources": [],
       "actions": [
         { "key": "ctrl+d", "display_name": "Delete Snapshot", "shortcut": "ctrl+d", "sdk_method": "delete_db_snapshot", "confirm": { "message": "Delete RDS snapshot", "default_yes": false, "destructive": true } }
-      ]
+      ],
+      "api_config": {
+        "protocol": "query",
+        "action": "DescribeDBSnapshots",
+        "response_root": "/DescribeDBSnapshotsResponse/DescribeDBSnapshotsResult/DBSnapshots/DBSnapshot",
+        "param_mapping": {
+          "db_instance_identifier": "DBInstanceIdentifier"
+        }
+      },
+      "field_mappings": {
+        "DBSnapshotIdentifier": { "source": "/DBSnapshotIdentifier", "default": "-" },
+        "DBInstanceIdentifier": { "source": "/DBInstanceIdentifier", "default": "-" },
+        "Status": { "source": "/Status", "default": "-" },
+        "SnapshotType": { "source": "/SnapshotType", "default": "-" },
+        "Engine": { "source": "/Engine", "default": "-" },
+        "AllocatedStorage": { "source": "/AllocatedStorage", "default": "0" },
+        "SnapshotCreateTime": { "source": "/SnapshotCreateTime", "default": "-" }
+      }
     }
   }
 }

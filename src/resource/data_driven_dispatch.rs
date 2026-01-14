@@ -102,13 +102,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ec2_instances_uses_legacy() {
-        // EC2 instances should still use legacy dispatch (not yet migrated)
+    fn test_ec2_instances_uses_data_driven() {
+        // EC2 instances now use data-driven dispatch
         let result = supports_data_driven("ec2-instances");
-        assert!(
-            !result,
-            "EC2 instances should use legacy dispatch (not yet migrated)"
-        );
+        assert!(result, "EC2 instances should use data-driven dispatch");
     }
 
     #[test]
