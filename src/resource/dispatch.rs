@@ -381,25 +381,33 @@ pub async fn execute_action_data_driven(
                 .as_ref()
                 .ok_or_else(|| anyhow!("Query action requires 'action' field"))?;
 
-            let mut params: Vec<(&str, &str)> = Vec::new();
+            let mut params_owned: Vec<(String, String)> = Vec::new();
 
-            // Add resource ID parameter
-            if let Some(ref id_param) = action_config.id_param {
-                params.push((id_param.as_str(), resource_id));
+            // Handle special formats
+            if action_config.special_handling.as_deref() == Some("parse_pipe_format_tg_target") {
+                // Format: target_group_arn|target_id
+                let parts: Vec<&str> = resource_id.split('|').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow!(
+                        "Invalid target format, expected target_group_arn|target_id"
+                    ));
+                }
+                params_owned.push(("TargetGroupArn".to_string(), parts[0].to_string()));
+                params_owned.push(("Targets.member.1.Id".to_string(), parts[1].to_string()));
+            } else {
+                // Add resource ID parameter
+                if let Some(ref id_param) = action_config.id_param {
+                    params_owned.push((id_param.clone(), resource_id.to_string()));
+                }
             }
 
             // Add static parameters
             for (key, value) in &action_config.static_params {
                 if let Some(s) = value.as_str() {
-                    params.push((key.as_str(), s));
+                    params_owned.push((key.clone(), s.to_string()));
                 }
             }
 
-            // Convert to owned for the request
-            let params_owned: Vec<(String, String)> = params
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
             let params_ref: Vec<(&str, &str)> = params_owned
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -689,28 +697,22 @@ fn extract_single_item(json: &Value, path: &str) -> Result<Value> {
 // =============================================================================
 
 /// Execute an action on a resource (start, stop, terminate, etc.)
-/// First tries data-driven dispatch from JSON config, then falls back to legacy.
+/// Uses data-driven dispatch from JSON config.
 pub async fn execute_action(
     service: &str,
     action: &str,
     clients: &AwsClients,
     resource_id: &str,
 ) -> Result<()> {
-    // Try to find a resource with this action configured in JSON
-    if let Some((resource_key, _)) = find_resource_with_action(service, action) {
-        debug!(
-            "Found data-driven action config for {}:{} in {}",
-            service, action, resource_key
-        );
-        return execute_action_data_driven(&resource_key, action, clients, resource_id).await;
-    }
+    let (resource_key, _) = find_resource_with_action(service, action).ok_or_else(|| {
+        anyhow!(
+            "Action '{}' not configured for service '{}'. Add action_configs to the resource JSON.",
+            action,
+            service
+        )
+    })?;
 
-    // Fall back to legacy hardcoded handlers for unconfigured actions
-    debug!(
-        "No data-driven config found for {}:{}, using legacy handler",
-        service, action
-    );
-    execute_action_legacy(service, action, clients, resource_id).await
+    execute_action_data_driven(&resource_key, action, clients, resource_id).await
 }
 
 /// Find a resource that has the given action configured
@@ -728,136 +730,28 @@ fn find_resource_with_action(
     None
 }
 
-/// Legacy action execution (fallback for special actions not configurable in JSON)
-async fn execute_action_legacy(
-    service: &str,
-    action: &str,
-    clients: &AwsClients,
-    resource_id: &str,
-) -> Result<()> {
-    match (service, action) {
-        // ELBv2 deregister_targets - composite action with special resource_id format
-        // Format: target_group_arn|target_id
-        ("elbv2", "deregister_targets") => {
-            let parts: Vec<&str> = resource_id.split('|').collect();
-            if parts.len() != 2 {
-                return Err(anyhow!(
-                    "Invalid target format, expected target_group_arn|target_id"
-                ));
-            }
-            clients
-                .http
-                .query_request(
-                    "elbv2",
-                    "DeregisterTargets",
-                    &[
-                        ("TargetGroupArn", parts[0]),
-                        ("Targets.member.1.Id", parts[1]),
-                    ],
-                )
-                .await?;
-            Ok(())
-        }
-
-        _ => Err(anyhow!(
-            "Unknown action: service='{}', action='{}'. Configure it in the resource JSON.",
-            service,
-            action
-        )),
-    }
-}
-
 // =============================================================================
-// Unified Describe Function
+// Describe Function
 // =============================================================================
 
 /// Fetch full details for a single resource by ID
-/// First tries data-driven dispatch from JSON config, then falls back to legacy.
+/// Uses data-driven dispatch from JSON config.
 pub async fn describe_resource(
     resource_key: &str,
     clients: &AwsClients,
     resource_id: &str,
 ) -> Result<Value> {
-    debug!(
-        "Describing resource: {} with id: {}",
-        resource_key, resource_id
-    );
+    let resource =
+        get_resource(resource_key).ok_or_else(|| anyhow!("Unknown resource: {}", resource_key))?;
 
-    // Try data-driven describe first
-    if let Some(resource) = get_resource(resource_key) {
-        if resource.describe_config.is_some() {
-            debug!("Using data-driven describe for {}", resource_key);
-            return describe_resource_data_driven(resource_key, clients, resource_id).await;
-        }
+    if resource.describe_config.is_none() {
+        return Err(anyhow!(
+            "Describe not configured for '{}'. Add describe_config to the resource JSON.",
+            resource_key
+        ));
     }
 
-    // Fall back to legacy handlers for special cases
-    debug!("Using legacy describe for {}", resource_key);
-    describe_resource_legacy(resource_key, clients, resource_id).await
-}
-
-/// Legacy describe (fallback for resources with special handling needs)
-async fn describe_resource_legacy(
-    resource_key: &str,
-    clients: &AwsClients,
-    resource_id: &str,
-) -> Result<Value> {
-    match resource_key {
-        // S3 buckets need special region resolution and multiple API calls
-        "s3-buckets" => {
-            let mut result = json!({
-                "BucketName": resource_id,
-            });
-
-            let bucket_region = clients
-                .http
-                .get_bucket_region(resource_id)
-                .await
-                .unwrap_or_else(|_| "us-east-1".to_string());
-            result["Region"] = json!(&bucket_region);
-
-            if let Ok(xml) = clients
-                .http
-                .rest_xml_request_s3_bucket("GET", resource_id, "?versioning", None, &bucket_region)
-                .await
-            {
-                if let Ok(json) = xml_to_json(&xml) {
-                    let status = json
-                        .pointer("/VersioningConfiguration/Status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Disabled");
-                    result["Versioning"] = json!(status);
-                }
-            }
-
-            if let Ok(xml) = clients
-                .http
-                .rest_xml_request_s3_bucket("GET", resource_id, "?encryption", None, &bucket_region)
-                .await
-            {
-                if let Ok(json) = xml_to_json(&xml) {
-                    if let Some(rules) = json.pointer("/ServerSideEncryptionConfiguration/Rule") {
-                        result["Encryption"] = rules.clone();
-                    }
-                }
-            } else {
-                result["Encryption"] = json!("None");
-            }
-
-            Ok(result)
-        }
-
-        _ => {
-            debug!(
-                "No describe implementation for {}, falling back to list data",
-                resource_key
-            );
-            Err(anyhow!(
-                "Describe not implemented for {}. Configure describe_config in the resource JSON.",
-                resource_key
-            ))
-        }
-    }
+    describe_resource_data_driven(resource_key, clients, resource_id).await
 }
 
 // =============================================================================

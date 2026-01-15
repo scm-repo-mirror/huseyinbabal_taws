@@ -237,6 +237,14 @@
         "HealthState": { "source": "/TargetHealth/State", "default": "-" },
         "HealthReason": { "source": "/TargetHealth/Reason", "default": "-" },
         "HealthDescription": { "source": "/TargetHealth/Description", "default": "-" }
+      },
+      "action_configs": {
+        "deregister_targets": {
+          "action_id": "deregister_targets",
+          "protocol": "query",
+          "action": "DeregisterTargets",
+          "special_handling": "parse_pipe_format_tg_target"
+        }
       }
     }
   },
