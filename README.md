@@ -324,6 +324,8 @@ See [Authentication](#authentication) for credential setup.
 | `AWS_ACCESS_KEY_ID` | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `AWS_SESSION_TOKEN` | AWS session token (for temporary credentials) |
+| `AWS_SHARED_CREDENTIALS_FILE` | Custom path to credentials file (default: `~/.aws/credentials`) |
+| `AWS_CONFIG_FILE` | Custom path to config file (default: `~/.aws/config`) |
 | `AWS_ENDPOINT_URL` | Custom endpoint URL (for LocalStack, etc.) |
 
 ---
