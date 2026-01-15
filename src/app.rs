@@ -1320,7 +1320,7 @@ impl App {
         }
 
         // Call the SDK
-        match crate::resource::sdk_dispatch::invoke_sdk(
+        match crate::resource::invoke_sdk(
             "cloudwatchlogs",
             "get_log_events",
             &self.clients,
@@ -1332,13 +1332,18 @@ impl App {
                 state.error = None;
 
                 // Extract events
-                if let Some(events) = response.get("events").and_then(|v| v.as_array()) {
+                if let Some(events) = response
+                    .get("events")
+                    .and_then(|v: &serde_json::Value| v.as_array())
+                {
                     for event in events {
-                        let timestamp =
-                            event.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let timestamp = event
+                            .get("timestamp")
+                            .and_then(|v: &serde_json::Value| v.as_i64())
+                            .unwrap_or(0);
                         let message = event
                             .get("message")
-                            .and_then(|v| v.as_str())
+                            .and_then(|v: &serde_json::Value| v.as_str())
                             .unwrap_or("")
                             .to_string();
 

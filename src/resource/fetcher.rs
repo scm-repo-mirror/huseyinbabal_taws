@@ -3,12 +3,11 @@
 //! This module provides a single generic function to fetch any AWS resource.
 //! All the logic is driven by the resources.json configuration.
 //!
-//! Resources with `api_config` defined will use the new data-driven dispatch,
-//! while legacy resources continue to use the old sdk_dispatch.
+//! Resources with `api_config` defined will use data-driven dispatch,
+//! while legacy resources (S3 objects, STS) use the legacy invoke_sdk.
 
-use super::data_driven_dispatch::invoke_data_driven;
+use super::dispatch::{invoke_data_driven, invoke_sdk};
 use super::registry::get_resource;
-use super::sdk_dispatch::invoke_sdk;
 use crate::aws::client::AwsClients;
 use anyhow::{anyhow, Result};
 use serde_json::Value;

@@ -1,12 +1,17 @@
-//! SDK Dispatcher - AWS API calls using lightweight HTTP client
+//! AWS API Dispatcher
 //!
-//! This module handles AWS API calls that haven't been migrated to data-driven dispatch.
-//! Most list operations now use the data-driven system in data_driven_dispatch.rs.
-//! This file contains:
-//! - Action handlers (write operations like start/stop/delete)
-//! - Describe handlers (single resource details)
-//! - Legacy list operations for special cases (S3 objects, STS)
+//! This module handles all AWS API dispatching:
+//! - List operations (data-driven via JSON config)
+//! - Actions (write operations like start/stop/delete)
+//! - Describe (single resource details)
+//!
+//! Most list operations use data-driven dispatch based on JSON configuration.
+//! Special cases (S3 objects, STS) use legacy handlers.
 
+use super::field_mapper::build_response;
+use super::handlers::get_protocol_handler;
+use super::protocol::ApiProtocol;
+use super::registry::get_resource;
 use crate::aws::client::AwsClients;
 use crate::aws::http::xml_to_json;
 use anyhow::{anyhow, Result};
@@ -69,6 +74,275 @@ fn format_epoch_millis(millis: i64) -> String {
 /// Format epoch milliseconds to human-readable date string (public for log tail UI)
 pub fn format_log_timestamp(millis: i64) -> String {
     format_epoch_millis(millis)
+}
+
+// =============================================================================
+// Data-Driven List Operations
+// =============================================================================
+
+/// Invoke an AWS API using the data-driven configuration
+///
+/// This function reads the API configuration from the resource definition
+/// and uses the appropriate protocol handler to execute the request.
+pub async fn invoke_data_driven(
+    resource_key: &str,
+    clients: &AwsClients,
+    params: &Value,
+) -> Result<Value> {
+    let resource_def =
+        get_resource(resource_key).ok_or_else(|| anyhow!("Unknown resource: {}", resource_key))?;
+
+    let api_config = resource_def
+        .api_config
+        .as_ref()
+        .ok_or_else(|| anyhow!("Resource {} does not have api_config", resource_key))?;
+
+    let handler = get_protocol_handler(api_config.protocol);
+
+    let service = api_config
+        .service_name
+        .as_deref()
+        .unwrap_or(&resource_def.service);
+
+    let parsed = handler
+        .invoke(
+            clients,
+            service,
+            api_config,
+            params,
+            &resource_def.field_mappings,
+        )
+        .await?;
+
+    Ok(build_response(
+        parsed.items,
+        &resource_def.response_path,
+        parsed.next_token,
+    ))
+}
+
+/// Check if a resource supports data-driven dispatch
+pub fn supports_data_driven(resource_key: &str) -> bool {
+    get_resource(resource_key)
+        .map(|r| r.uses_data_driven_dispatch())
+        .unwrap_or(false)
+}
+
+/// Get the protocol type for a resource (if using data-driven dispatch)
+pub fn get_resource_protocol(resource_key: &str) -> Option<ApiProtocol> {
+    get_resource(resource_key)
+        .and_then(|r| r.api_config.as_ref())
+        .map(|c| c.protocol)
+}
+
+// =============================================================================
+// Legacy List Operations (special cases)
+// =============================================================================
+
+/// Invoke an AWS API method for special cases not suited to data-driven config.
+/// Most list operations should use invoke_data_driven instead.
+pub async fn invoke_sdk(
+    service: &str,
+    method: &str,
+    clients: &AwsClients,
+    params: &Value,
+) -> Result<Value> {
+    match (service, method) {
+        // S3 list_objects_v2 - requires bucket region resolution and complex folder handling
+        ("s3", "list_objects_v2") => {
+            let bucket = params
+                .get("bucket_names")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Bucket name required"))?;
+
+            let prefix = params
+                .get("prefix")
+                .map(|v| {
+                    if let Some(s) = v.as_str() {
+                        s.to_string()
+                    } else if let Some(arr) = v.as_array() {
+                        arr.first()
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        String::new()
+                    }
+                })
+                .unwrap_or_default();
+
+            let bucket_region = clients.http.get_bucket_region(bucket).await?;
+            debug!("Bucket {} is in region {}", bucket, bucket_region);
+
+            let path = if prefix.is_empty() {
+                "?list-type=2&delimiter=/".to_string()
+            } else {
+                format!(
+                    "?list-type=2&delimiter=/&prefix={}",
+                    urlencoding::encode(&prefix)
+                )
+            };
+
+            let xml = clients
+                .http
+                .rest_xml_request_s3_bucket("GET", bucket, &path, None, &bucket_region)
+                .await?;
+            let json = xml_to_json(&xml)?;
+
+            let mut objects: Vec<Value> = vec![];
+
+            // Add common prefixes (folders)
+            if let Some(prefixes) = json.pointer("/ListBucketResult/CommonPrefixes") {
+                let prefix_list = match prefixes {
+                    Value::Array(arr) => arr.clone(),
+                    obj @ Value::Object(_) => vec![obj.clone()],
+                    _ => vec![],
+                };
+                for p in prefix_list {
+                    let prefix_val = p.pointer("/Prefix").and_then(|v| v.as_str()).unwrap_or("-");
+                    let display_name = prefix_val
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(prefix_val);
+                    objects.push(json!({
+                        "Key": prefix_val,
+                        "DisplayName": format!("{}/", display_name),
+                        "Size": "-",
+                        "LastModified": "-",
+                        "StorageClass": "FOLDER",
+                        "IsFolder": true
+                    }));
+                }
+            }
+
+            // Add objects (files)
+            if let Some(contents) = json.pointer("/ListBucketResult/Contents") {
+                let content_list = match contents {
+                    Value::Array(arr) => arr.clone(),
+                    obj @ Value::Object(_) => vec![obj.clone()],
+                    _ => vec![],
+                };
+                for obj in content_list {
+                    let key = obj.pointer("/Key").and_then(|v| v.as_str()).unwrap_or("-");
+                    if key == prefix {
+                        continue;
+                    }
+                    let display_name = key.rsplit('/').next().unwrap_or(key);
+                    let size = obj.pointer("/Size").and_then(|v| v.as_str()).unwrap_or("0");
+                    let size_formatted = format_bytes(size.parse::<u64>().unwrap_or(0));
+                    objects.push(json!({
+                        "Key": key,
+                        "DisplayName": display_name,
+                        "Size": size_formatted,
+                        "LastModified": obj.pointer("/LastModified").and_then(|v| v.as_str()).unwrap_or("-"),
+                        "StorageClass": obj.pointer("/StorageClass").and_then(|v| v.as_str()).unwrap_or("STANDARD"),
+                        "IsFolder": false
+                    }));
+                }
+            }
+
+            Ok(json!({ "objects": objects }))
+        }
+
+        // STS get_caller_identity - returns single item, not a list
+        ("sts", "get_caller_identity") => {
+            let xml = clients
+                .http
+                .query_request("sts", "GetCallerIdentity", &[])
+                .await?;
+            let json = xml_to_json(&xml)?;
+
+            let result_path = json.pointer("/GetCallerIdentityResponse/GetCallerIdentityResult");
+            let identity = json!({
+                "Account": result_path.and_then(|r| r.pointer("/Account")).and_then(|v| v.as_str()).unwrap_or("-"),
+                "UserId": result_path.and_then(|r| r.pointer("/UserId")).and_then(|v| v.as_str()).unwrap_or("-"),
+                "Arn": result_path.and_then(|r| r.pointer("/Arn")).and_then(|v| v.as_str()).unwrap_or("-"),
+            });
+
+            Ok(json!({ "identity": [identity] }))
+        }
+
+        // CloudWatch Logs - tail_logs (streaming operation)
+        ("cloudwatchlogs", "tail_logs") => {
+            let log_group = extract_param(params, "log_group_name");
+            let log_stream = extract_param(params, "log_stream_name");
+
+            if log_group.is_empty() || log_stream.is_empty() {
+                return Err(anyhow!("Log group and stream names required"));
+            }
+
+            let request_body = json!({
+                "logGroupName": log_group,
+                "logStreamName": log_stream,
+                "startFromHead": false,
+                "limit": 100
+            })
+            .to_string();
+
+            let response = clients
+                .http
+                .json_request("logs", "GetLogEvents", &request_body)
+                .await?;
+            let json: Value = serde_json::from_str(&response)?;
+
+            let events = json
+                .get("events")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let result: Vec<Value> = events
+                .iter()
+                .map(|e| {
+                    let timestamp = e.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    json!({
+                        "timestamp": format_epoch_millis(timestamp),
+                        "message": e.get("message").and_then(|v| v.as_str()).unwrap_or("-"),
+                    })
+                })
+                .collect();
+
+            Ok(json!({ "events": result }))
+        }
+
+        // CloudWatch Logs - get_log_events (for log tailing UI)
+        ("cloudwatchlogs", "get_log_events") => {
+            let log_group = extract_param(params, "log_group_name");
+            let log_stream = extract_param(params, "log_stream_name");
+
+            if log_group.is_empty() || log_stream.is_empty() {
+                return Err(anyhow!("Log group and stream names required"));
+            }
+
+            let mut request = json!({
+                "logGroupName": log_group,
+                "logStreamName": log_stream,
+                "startFromHead": false,
+                "limit": 100
+            });
+
+            // Add next token if provided
+            if let Some(token) = params.get("next_forward_token").and_then(|v| v.as_str()) {
+                request["nextToken"] = json!(token);
+            }
+
+            let response = clients
+                .http
+                .json_request("logs", "GetLogEvents", &request.to_string())
+                .await?;
+            let json: Value = serde_json::from_str(&response)?;
+
+            Ok(json)
+        }
+
+        _ => Err(anyhow!(
+            "Operation not handled: service='{}', method='{}'. Use data-driven dispatch.",
+            service,
+            method
+        )),
+    }
 }
 
 // =============================================================================
@@ -263,8 +537,6 @@ pub async fn execute_action(
             Ok(())
         }
         ("ecs", "delete_service") => {
-            // Service ARN format: arn:aws:ecs:region:account:service/cluster/service-name
-            // Extract cluster from ARN
             let parts: Vec<&str> = resource_id.split('/').collect();
             let cluster = if parts.len() >= 2 {
                 parts[parts.len() - 2]
@@ -288,7 +560,6 @@ pub async fn execute_action(
             Ok(())
         }
         ("ecs", "stop_task") => {
-            // Task ARN format: arn:aws:ecs:region:account:task/cluster/task-id
             let parts: Vec<&str> = resource_id.split('/').collect();
             let cluster = if parts.len() >= 2 {
                 parts[parts.len() - 2]
@@ -365,7 +636,6 @@ pub async fn execute_action(
             Ok(())
         }
         ("elbv2", "deregister_targets") => {
-            // resource_id format: target_group_arn|target_id
             let parts: Vec<&str> = resource_id.split('|').collect();
             if parts.len() != 2 {
                 return Err(anyhow!(
@@ -412,7 +682,6 @@ pub async fn execute_action(
             Ok(())
         }
 
-        // Unknown action
         _ => Err(anyhow!(
             "Unknown action: service='{}', action='{}'",
             service,
@@ -699,189 +968,40 @@ pub async fn describe_resource(
 }
 
 // =============================================================================
-// Legacy List Operations (special cases only)
+// Tests
 // =============================================================================
 
-/// Invoke an AWS API method and return the response as JSON.
-/// Most list operations now use data-driven dispatch. This function only handles
-/// special cases that can't be easily configured (S3 objects, STS).
-pub async fn invoke_sdk(
-    service: &str,
-    method: &str,
-    clients: &AwsClients,
-    params: &Value,
-) -> Result<Value> {
-    match (service, method) {
-        // S3 list_objects_v2 - requires bucket region resolution and complex folder handling
-        ("s3", "list_objects_v2") => {
-            let bucket = params
-                .get("bucket_names")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("Bucket name required"))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-            let prefix = params
-                .get("prefix")
-                .map(|v| {
-                    if let Some(s) = v.as_str() {
-                        s.to_string()
-                    } else if let Some(arr) = v.as_array() {
-                        arr.first()
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string()
-                    } else {
-                        String::new()
-                    }
-                })
-                .unwrap_or_default();
+    #[test]
+    fn test_supports_data_driven_returns_false_for_unknown() {
+        let result = supports_data_driven("nonexistent-resource");
+        assert!(!result);
+    }
 
-            let bucket_region = clients.http.get_bucket_region(bucket).await?;
-            debug!("Bucket {} is in region {}", bucket, bucket_region);
+    #[test]
+    fn test_dynamodb_tables_uses_data_driven() {
+        let result = supports_data_driven("dynamodb-tables");
+        assert!(result, "DynamoDB tables should use data-driven dispatch");
+    }
 
-            let path = if prefix.is_empty() {
-                "?list-type=2&delimiter=/".to_string()
-            } else {
-                format!(
-                    "?list-type=2&delimiter=/&prefix={}",
-                    urlencoding::encode(&prefix)
-                )
-            };
+    #[test]
+    fn test_ec2_instances_uses_data_driven() {
+        let result = supports_data_driven("ec2-instances");
+        assert!(result, "EC2 instances should use data-driven dispatch");
+    }
 
-            let xml = clients
-                .http
-                .rest_xml_request_s3_bucket("GET", bucket, &path, None, &bucket_region)
-                .await?;
-            let json = xml_to_json(&xml)?;
+    #[test]
+    fn test_lambda_functions_uses_data_driven() {
+        let result = supports_data_driven("lambda-functions");
+        assert!(result, "Lambda functions should use data-driven dispatch");
+    }
 
-            let mut objects: Vec<Value> = vec![];
-
-            // Add common prefixes (folders)
-            if let Some(prefixes) = json.pointer("/ListBucketResult/CommonPrefixes") {
-                let prefix_list = match prefixes {
-                    Value::Array(arr) => arr.clone(),
-                    obj @ Value::Object(_) => vec![obj.clone()],
-                    _ => vec![],
-                };
-                for p in prefix_list {
-                    let prefix_val = p
-                        .pointer("/Prefix")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("-");
-                    let display_name = prefix_val
-                        .trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(prefix_val);
-                    objects.push(json!({
-                        "Key": prefix_val,
-                        "DisplayName": format!("{}/", display_name),
-                        "Size": "-",
-                        "LastModified": "-",
-                        "StorageClass": "FOLDER",
-                        "IsFolder": true
-                    }));
-                }
-            }
-
-            // Add objects (files)
-            if let Some(contents) = json.pointer("/ListBucketResult/Contents") {
-                let content_list = match contents {
-                    Value::Array(arr) => arr.clone(),
-                    obj @ Value::Object(_) => vec![obj.clone()],
-                    _ => vec![],
-                };
-                for obj in content_list {
-                    let key = obj.pointer("/Key").and_then(|v| v.as_str()).unwrap_or("-");
-                    if key == prefix {
-                        continue;
-                    }
-                    let display_name = key.rsplit('/').next().unwrap_or(key);
-                    let size = obj
-                        .pointer("/Size")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("0");
-                    let size_formatted = format_bytes(size.parse::<u64>().unwrap_or(0));
-                    objects.push(json!({
-                        "Key": key,
-                        "DisplayName": display_name,
-                        "Size": size_formatted,
-                        "LastModified": obj.pointer("/LastModified").and_then(|v| v.as_str()).unwrap_or("-"),
-                        "StorageClass": obj.pointer("/StorageClass").and_then(|v| v.as_str()).unwrap_or("STANDARD"),
-                        "IsFolder": false
-                    }));
-                }
-            }
-
-            Ok(json!({ "objects": objects }))
-        }
-
-        // STS get_caller_identity - returns single item, not a list
-        ("sts", "get_caller_identity") => {
-            let xml = clients
-                .http
-                .query_request("sts", "GetCallerIdentity", &[])
-                .await?;
-            let json = xml_to_json(&xml)?;
-
-            let result_path = json.pointer("/GetCallerIdentityResponse/GetCallerIdentityResult");
-            let identity = json!({
-                "Account": result_path.and_then(|r| r.pointer("/Account")).and_then(|v| v.as_str()).unwrap_or("-"),
-                "UserId": result_path.and_then(|r| r.pointer("/UserId")).and_then(|v| v.as_str()).unwrap_or("-"),
-                "Arn": result_path.and_then(|r| r.pointer("/Arn")).and_then(|v| v.as_str()).unwrap_or("-"),
-            });
-
-            Ok(json!({ "identity": [identity] }))
-        }
-
-        // CloudWatch Logs - tail_logs (streaming operation, not a simple list)
-        ("cloudwatchlogs", "tail_logs") => {
-            let log_group = extract_param(params, "log_group_name");
-            let log_stream = extract_param(params, "log_stream_name");
-
-            if log_group.is_empty() || log_stream.is_empty() {
-                return Err(anyhow!("Log group and stream names required"));
-            }
-
-            let request_body = json!({
-                "logGroupName": log_group,
-                "logStreamName": log_stream,
-                "startFromHead": false,
-                "limit": 100
-            })
-            .to_string();
-
-            let response = clients
-                .http
-                .json_request("logs", "GetLogEvents", &request_body)
-                .await?;
-            let json: Value = serde_json::from_str(&response)?;
-
-            let events = json
-                .get("events")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let result: Vec<Value> = events
-                .iter()
-                .map(|e| {
-                    let timestamp = e.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-                    json!({
-                        "timestamp": format_epoch_millis(timestamp),
-                        "message": e.get("message").and_then(|v| v.as_str()).unwrap_or("-"),
-                    })
-                })
-                .collect();
-
-            Ok(json!({ "events": result }))
-        }
-
-        // Unknown operation - this shouldn't happen if data-driven dispatch is working
-        _ => Err(anyhow!(
-            "Operation not handled by legacy dispatch: service='{}', method='{}'. This should use data-driven dispatch.",
-            service,
-            method
-        )),
+    #[test]
+    fn test_iam_users_uses_data_driven() {
+        let result = supports_data_driven("iam-users");
+        assert!(result, "IAM users should use data-driven dispatch");
     }
 }
