@@ -120,26 +120,33 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Home => app.go_to_top(),
         KeyCode::Char('G') | KeyCode::End => app.go_to_bottom(),
 
-        // Page navigation / Destructive action (ctrl+d)
+        // Page navigation
+        KeyCode::PageUp | KeyCode::Char('b')
+            if key.code == KeyCode::PageUp || key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.page_up(10);
+        }
+        KeyCode::PageDown | KeyCode::Char('f')
+            if key.code == KeyCode::PageDown || key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.page_down(10);
+        }
+
+        // Destructive action (ctrl+d)
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Check if current resource has a ctrl+d action defined
-            let mut action_triggered = false;
             if let Some(resource) = app.current_resource() {
                 for action in &resource.actions {
                     if action.shortcut.as_deref() == Some("ctrl+d") {
                         if let Some(item) = app.selected_item() {
                             let id = crate::resource::extract_json_value(item, &resource.id_field);
                             if id != "-" && !id.is_empty() {
-                                // Block action in readonly mode
                                 if app.readonly {
                                     app.show_warning(
                                         "This operation is not supported in read-only mode",
                                     );
-                                    action_triggered = true;
                                 } else if let Some(pending) = app.create_pending_action(action, &id)
                                 {
                                     app.enter_confirm_mode(pending);
-                                    action_triggered = true;
                                 }
                             }
                         }
@@ -147,19 +154,6 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<bool> {
                     }
                 }
             }
-            // If no action, use as page down
-            if !action_triggered {
-                app.page_down(10);
-            }
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.page_up(10);
-        }
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.page_down(10);
-        }
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.page_up(10);
         }
 
         // Describe mode (d or Enter)
