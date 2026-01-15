@@ -227,8 +227,10 @@ AWS_ENDPOINT_URL=http://localhost:4566 taws
 | **Navigation** | | |
 | Move up | `k` / `↑` | Move selection up |
 | Move down | `j` / `↓` | Move selection down |
-| Top | `gg` | Jump to first item |
-| Bottom | `G` | Jump to last item |
+| Top | `gg` / `Home` | Jump to first item |
+| Bottom | `G` / `End` | Jump to last item |
+| Page up | `PgUp` / `Ctrl+b` | Scroll up one page |
+| Page down | `PgDn` / `Ctrl+f` | Scroll down one page |
 | **Pagination** | | |
 | Next page | `]` | Load next page of results |
 | Previous page | `[` | Load previous page of results |
@@ -245,7 +247,7 @@ AWS_ENDPOINT_URL=http://localhost:4566 taws
 | **EC2 Actions** | | |
 | Start instance | `s` | Start selected EC2 instance |
 | Stop instance | `S` | Stop selected EC2 instance |
-| Terminate | `T` | Terminate selected EC2 instance |
+| Terminate | `Ctrl+d` | Terminate selected EC2 instance |
 
 ---
 
