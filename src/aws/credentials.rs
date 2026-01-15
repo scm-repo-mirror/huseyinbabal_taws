@@ -227,9 +227,14 @@ fn parse_ini_file(content: &str) -> HashMap<String, HashMap<String, String>> {
     sections
 }
 
-/// Load credentials from ~/.aws/credentials
+/// Load credentials from ~/.aws/credentials or AWS_SHARED_CREDENTIALS_FILE
 fn load_from_credentials_file(profile: &str) -> Result<Credentials> {
-    let creds_path = aws_config_dir()?.join("credentials");
+    // Check AWS_SHARED_CREDENTIALS_FILE env var first (AWS SDK standard)
+    let creds_path = if let Ok(path) = env::var("AWS_SHARED_CREDENTIALS_FILE") {
+        PathBuf::from(path)
+    } else {
+        aws_config_dir()?.join("credentials")
+    };
     let content =
         fs::read_to_string(&creds_path).map_err(|_| anyhow!("Could not read {:?}", creds_path))?;
 
