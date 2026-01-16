@@ -1997,9 +1997,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pki-types"
-version = "1.13.2"
+version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21e6f2ab2928ca4291b86736a8bd920a277a399bba1589409d72154ff87c1282"
+checksum = "4910321ebe4151be888e35fe062169554e74aad01beafed60410131420ceffbc"
 dependencies = [
  "web-time",
  "zeroize",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "taws"
-version = "1.2.0-rc.3"
+version = "1.2.0-rc.4"
 dependencies = [
  "anyhow",
  "async-trait",
