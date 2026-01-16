@@ -554,6 +554,6 @@ mod tests {
 
         let view_action = view_action.unwrap();
         assert!(view_action.show_result, "get_secret_value action should have show_result=true");
-        assert_eq!(view_action.shortcut.as_deref(), Some("v"), "get_secret_value should use 'v' shortcut");
+        assert_eq!(view_action.shortcut.as_deref(), Some("x"), "get_secret_value should use 'x' shortcut");
     }
 }
