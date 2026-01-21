@@ -44,6 +44,9 @@
             "ForceDelete": "true"
           }
         }
+      },
+      "tag_filter": {
+        "enabled": true
       }
     }
   }

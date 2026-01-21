@@ -194,10 +194,13 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
 
-        // Escape clears filter if present
+        // Escape clears filter/tag filter if present
         KeyCode::Esc => {
             if !app.filter_text.is_empty() {
                 app.clear_filter();
+            } else if app.tag_filter.is_some() {
+                // Clear server-side tag filter and refresh
+                app.clear_tag_filter().await?;
             } else if app.parent_context.is_some() {
                 app.navigate_back().await?;
             }
@@ -330,15 +333,44 @@ async fn handle_filter_input(app: &mut App, key: KeyEvent) -> Result<bool> {
             app.clear_filter();
         }
         KeyCode::Enter => {
+            // Check if this is a tag filter that should trigger server-side filtering
+            if let Some((key, value)) = App::parse_tag_filter(&app.filter_text) {
+                if app.current_resource_supports_tag_filter() {
+                    // Set the tag filter and trigger a refresh
+                    app.tag_filter = Some(crate::app::TagFilter { key, value });
+                    app.filter_text.clear();
+                    app.filter_active = false;
+                    app.tag_filter_autocomplete_shown = false;
+                    // Reset pagination and refresh with the new filter
+                    app.reset_pagination();
+                    app.refresh_current().await?;
+                    return Ok(false);
+                }
+            }
             app.filter_active = false;
+            app.tag_filter_autocomplete_shown = false;
+        }
+        KeyCode::Tab => {
+            // Autocomplete "Tag:" when typing T/Ta/Tag
+            if app.should_show_tag_autocomplete() {
+                app.filter_text = "Tag:".to_string();
+                app.tag_filter_autocomplete_shown = false;
+            }
         }
         KeyCode::Backspace => {
             app.filter_text.pop();
+            // Update autocomplete state
+            app.tag_filter_autocomplete_shown = app.should_show_tag_autocomplete();
             app.apply_filter();
         }
         KeyCode::Char(c) => {
             app.filter_text.push(c);
-            app.apply_filter();
+            // Update autocomplete state
+            app.tag_filter_autocomplete_shown = app.should_show_tag_autocomplete();
+            // Only apply client-side filter if not a tag filter
+            if !app.filter_text.to_lowercase().starts_with("tag:") {
+                app.apply_filter();
+            }
         }
         _ => {}
     }
