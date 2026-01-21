@@ -238,7 +238,12 @@ fn render_dynamic_table(f: &mut Frame, app: &App, area: Rect) {
                     style = style.fg(Color::White);
                 }
                 let display_value = format_cell_value(&value, col);
-                let display_value = truncate_string(&display_value, 38);
+                // Show full value for selected row, truncate others
+                let display_value = if is_selected {
+                    display_value
+                } else {
+                    truncate_string(&display_value, 38)
+                };
 
                 if highlight_filter_matches
                     && (col.json_path == resource.name_field || col.json_path == resource.id_field)
@@ -314,10 +319,14 @@ fn format_cell_value(value: &str, col: &ColumnDef) -> String {
     value.to_string()
 }
 
-/// Truncate string for display
+/// Truncate string for display (from the beginning, keeping the end visible)
 fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() > max_len {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+    if s.chars().count() > max_len {
+        // Truncate from the beginning, show the end (more meaningful for paths/names)
+        let chars: Vec<char> = s.chars().collect();
+        let start = chars.len().saturating_sub(max_len.saturating_sub(3));
+        let truncated: String = chars[start..].iter().collect();
+        format!("...{}", truncated)
     } else {
         s.to_string()
     }
