@@ -12,37 +12,9 @@ pub fn render(f: &mut Frame, app: &App) {
 
     f.render_widget(Clear, area);
 
-    let mut help_text: Vec<Line<'static>> = vec![
-        Line::from(""),
-        create_section("Navigation"),
-        create_key_line("j / ↓", "Move down"),
-        create_key_line("k / ↑", "Move up"),
-        create_key_line("gg / Home", "Go to top"),
-        create_key_line("G / End", "Go to bottom"),
-        create_key_line("PgUp / Ctrl+b", "Page up"),
-        create_key_line("PgDn / Ctrl+f", "Page down"),
-        create_key_line("]", "Next page (load more)"),
-        create_key_line("[", "Previous page"),
-        create_key_line("R", "Refresh list"),
-        Line::from(""),
-        create_section("Views"),
-        create_key_line("d / Enter", "Show details panel"),
-        create_key_line("J", "Show JSON view"),
-        create_key_line("?", "Toggle help"),
-        Line::from(""),
-        create_section("Details View"),
-        create_key_line("j / k", "Scroll up/down"),
-        create_key_line("PgUp / Ctrl+b", "Page up"),
-        create_key_line("PgDn / Ctrl+f", "Page down"),
-        create_key_line("g / Home", "Go to top"),
-        create_key_line("G / End", "Go to bottom"),
-        create_key_line("/", "Search in content"),
-        create_key_line("n / N", "Next/prev match"),
-        create_key_line("q / Esc / d", "Close details"),
-        Line::from(""),
-    ];
+    let mut help_text: Vec<Line<'static>> = vec![Line::from("")];
 
-    // Add resource-specific actions section
+    // Add resource-specific actions section FIRST (most important)
     if let Some(resource) = app.current_resource() {
         if !resource.actions.is_empty() {
             let section_title = format!("{} Actions", resource.display_name);
@@ -78,8 +50,24 @@ pub fn render(f: &mut Frame, app: &App) {
         ]);
     }
 
-    // Add remaining static sections
+    // Add navigation and general sections
     help_text.extend(vec![
+        create_section("Navigation"),
+        create_key_line("j / ↓", "Move down"),
+        create_key_line("k / ↑", "Move up"),
+        create_key_line("gg / Home", "Go to top"),
+        create_key_line("G / End", "Go to bottom"),
+        create_key_line("PgUp / Ctrl+b", "Page up"),
+        create_key_line("PgDn / Ctrl+f", "Page down"),
+        create_key_line("]", "Next page (load more)"),
+        create_key_line("[", "Previous page"),
+        create_key_line("R", "Refresh list"),
+        Line::from(""),
+        create_section("Views"),
+        create_key_line("d / Enter", "Show details panel"),
+        create_key_line("J", "Show JSON view"),
+        create_key_line("?", "Toggle help"),
+        Line::from(""),
         create_section("General"),
         create_key_line("/", "Filter / Search"),
         create_key_line(":", "Command mode"),
