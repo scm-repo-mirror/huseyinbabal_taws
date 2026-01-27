@@ -80,17 +80,14 @@ pub fn render(f: &mut Frame, app: &App) {
 
     // Add remaining static sections
     help_text.extend(vec![
-        create_section("Modes"),
-        create_key_line("/", "Filter mode"),
+        create_section("General"),
+        create_key_line("/", "Filter / Search"),
         create_key_line(":", "Command mode"),
-        Line::from(""),
-        create_section("Common Commands"),
         create_key_line(":profiles", "Switch AWS profile"),
         create_key_line(":regions", "Switch AWS region"),
-        create_key_line("Backspace", "Go back (parent resource)"),
-        Line::from(""),
+        create_key_line("Backspace", "Go back"),
         create_key_line("Esc", "Close / Cancel"),
-        create_key_line("Ctrl+c", "Quit application"),
+        create_key_line("Ctrl+c", "Quit"),
     ]);
 
     let block = Block::default()
