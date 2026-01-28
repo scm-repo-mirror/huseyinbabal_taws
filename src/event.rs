@@ -801,7 +801,7 @@ async fn handle_sso_login_mode(app: &mut App, key: KeyEvent) -> Result<bool> {
 
 async fn handle_console_login_mode(app: &mut App, key: KeyEvent) -> Result<bool> {
     use crate::app::ConsoleLoginState;
-    use crate::aws::credentials;
+    use crate::aws::console_login;
 
     let console_state = match &app.console_login_state {
         Some(state) => state.clone(),
@@ -814,40 +814,102 @@ async fn handle_console_login_mode(app: &mut App, key: KeyEvent) -> Result<bool>
     match console_state {
         ConsoleLoginState::Prompt {
             profile,
-            login_session: _,
+            login_session,
         } => {
             match key.code {
                 KeyCode::Enter => {
-                    // User pressed Enter - try to load credentials again
-                    let profile_clone = profile.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        credentials::load_credentials(&profile_clone)
-                    })
-                    .await;
+                    // Check if AWS CLI supports `aws login`
+                    if !console_login::is_aws_login_available() {
+                        app.console_login_state = Some(ConsoleLoginState::Failed {
+                            profile: profile.clone(),
+                            error: "AWS CLI v2.32.0+ required for 'aws login' command. Please upgrade your AWS CLI.".to_string(),
+                        });
+                        return Ok(false);
+                    }
 
-                    match result {
-                        Ok(Ok(_)) => {
-                            // Credentials loaded successfully
-                            app.console_login_state = Some(ConsoleLoginState::Success { profile });
-                        }
-                        Ok(Err(e)) => {
-                            // Still failed
-                            app.console_login_state = Some(ConsoleLoginState::Failed {
-                                error: format!("Still unable to load credentials: {}", e),
+                    // Spawn `aws login` subprocess
+                    match console_login::spawn_aws_login(&profile, &app.region) {
+                        Ok((child, rx)) => {
+                            app.console_login_child = Some(child);
+                            app.console_login_rx = Some(rx);
+                            app.console_login_state = Some(ConsoleLoginState::WaitingForAuth {
+                                profile,
+                                login_session,
+                                url: None,
                             });
                         }
                         Err(e) => {
                             app.console_login_state = Some(ConsoleLoginState::Failed {
-                                error: format!("Task failed: {}", e),
+                                profile,
+                                error: format!("Failed to spawn aws login: {}", e),
                             });
                         }
                     }
                 }
                 KeyCode::Esc => {
                     app.console_login_state = None;
+                    app.console_login_child = None;
                     app.exit_mode();
                 }
                 _ => {}
+            }
+        }
+
+        ConsoleLoginState::WaitingForAuth {
+            profile,
+            login_session,
+            ..
+        } => {
+            match key.code {
+                KeyCode::Esc => {
+                    // Kill the subprocess and cancel
+                    if let Some(mut child) = app.console_login_child.take() {
+                        let _ = child.kill();
+                    }
+                    app.console_login_state = None;
+                    app.console_login_rx = None;
+                    app.exit_mode();
+                }
+                _ => {
+                    // Check subprocess status (also done in poll_console_login_if_waiting)
+                    if let Some(ref mut child) = app.console_login_child {
+                        match console_login::check_login_status(child) {
+                            Ok(Some(true)) => {
+                                // Success! Clean up and transition
+                                app.console_login_child = None;
+                                app.console_login_rx = None;
+                                app.console_login_state =
+                                    Some(ConsoleLoginState::Success { profile });
+                            }
+                            Ok(Some(false)) => {
+                                // Failed - get error message from stderr
+                                let error = console_login::read_child_stderr(child)
+                                    .unwrap_or_else(|| "aws login command failed".to_string());
+                                app.console_login_child = None;
+                                app.console_login_rx = None;
+                                app.console_login_state =
+                                    Some(ConsoleLoginState::Failed { profile, error });
+                            }
+                            Ok(None) => {
+                                // Still running, do nothing
+                            }
+                            Err(e) => {
+                                app.console_login_child = None;
+                                app.console_login_rx = None;
+                                app.console_login_state = Some(ConsoleLoginState::Failed {
+                                    profile,
+                                    error: format!("Error checking login status: {}", e),
+                                });
+                            }
+                        }
+                    } else {
+                        // No child process - shouldn't happen, but recover
+                        app.console_login_state = Some(ConsoleLoginState::Prompt {
+                            profile,
+                            login_session,
+                        });
+                    }
+                }
             }
         }
 
@@ -857,6 +919,8 @@ async fn handle_console_login_mode(app: &mut App, key: KeyEvent) -> Result<bool>
                     // Now complete the profile switch with fresh credentials
                     let profile_to_switch = profile.clone();
                     app.console_login_state = None;
+                    app.console_login_child = None;
+                    app.console_login_rx = None;
                     app.exit_mode();
                     // Actually switch the profile now that login is complete
                     if let Err(e) = app.switch_profile(&profile_to_switch).await {
@@ -872,23 +936,25 @@ async fn handle_console_login_mode(app: &mut App, key: KeyEvent) -> Result<bool>
         ConsoleLoginState::Failed { .. } => match key.code {
             KeyCode::Enter => {
                 // Retry - go back to prompt state
-                // Get the profile from the original state
-                if let Some(ConsoleLoginState::Prompt {
-                    profile,
-                    login_session,
-                }) = app.console_login_state.take()
+                if let Some(ConsoleLoginState::Failed { profile, .. }) =
+                    app.console_login_state.take()
                 {
+                    // Get login_session from previous state if possible, otherwise use profile
                     app.console_login_state = Some(ConsoleLoginState::Prompt {
+                        login_session: profile.clone(),
                         profile,
-                        login_session,
                     });
+                    app.console_login_rx = None;
                 } else {
                     app.console_login_state = None;
+                    app.console_login_rx = None;
                     app.exit_mode();
                 }
             }
             KeyCode::Esc => {
                 app.console_login_state = None;
+                app.console_login_child = None;
+                app.console_login_rx = None;
                 app.exit_mode();
             }
             _ => {}
@@ -896,6 +962,75 @@ async fn handle_console_login_mode(app: &mut App, key: KeyEvent) -> Result<bool>
     }
 
     Ok(false)
+}
+
+/// Poll console login subprocess if waiting (called from main loop)
+pub async fn poll_console_login_if_waiting(app: &mut App) {
+    use crate::app::ConsoleLoginState;
+    use crate::aws::console_login;
+
+    if app.mode != Mode::ConsoleLogin {
+        return;
+    }
+
+    let console_state = match &app.console_login_state {
+        Some(state) => state.clone(),
+        None => return,
+    };
+
+    if let ConsoleLoginState::WaitingForAuth {
+        profile,
+        login_session,
+        url,
+    } = console_state
+    {
+        // Check for URL updates from the receiver
+        if let Some(ref rx) = app.console_login_rx {
+            if let Ok(info) = rx.try_recv() {
+                if info.url.is_some() {
+                    app.console_login_state = Some(ConsoleLoginState::WaitingForAuth {
+                        profile: profile.clone(),
+                        login_session: login_session.clone(),
+                        url: info.url,
+                    });
+                }
+            }
+        }
+
+        // Check subprocess status
+        if let Some(ref mut child) = app.console_login_child {
+            match console_login::check_login_status(child) {
+                Ok(Some(true)) => {
+                    // Success!
+                    app.console_login_child = None;
+                    app.console_login_rx = None;
+                    app.console_login_state = Some(ConsoleLoginState::Success { profile });
+                }
+                Ok(Some(false)) => {
+                    // Failed - get error message from stderr
+                    let error = console_login::read_child_stderr(child)
+                        .unwrap_or_else(|| "aws login command failed".to_string());
+                    app.console_login_child = None;
+                    app.console_login_rx = None;
+                    app.console_login_state = Some(ConsoleLoginState::Failed { profile, error });
+                }
+                Ok(None) => {
+                    // Still running - update state if URL changed
+                    if url.is_none() {
+                        // Re-read state in case URL was updated above
+                    }
+                }
+                Err(e) => {
+                    app.console_login_child = None;
+                    app.console_login_rx = None;
+                    app.console_login_state = Some(ConsoleLoginState::Failed {
+                        profile,
+                        error: format!("Error checking login status: {}", e),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Poll SSO token in background (called from main loop when in SSO waiting state)

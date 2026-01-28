@@ -334,18 +334,16 @@ fn render_console_login_dialog(f: &mut Frame, app: &App) {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Run this command in another terminal:",
+                    "Press Enter to open browser for login",
                     Style::default().fg(Color::Yellow),
                 )),
                 Line::from(Span::styled(
-                    format!("  aws login --profile {}", profile),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    "(requires AWS CLI v2.32.0+)",
+                    Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Press Enter to retry after login, Esc to cancel",
+                    "Press Esc to cancel",
                     Style::default().fg(Color::DarkGray),
                 )),
             ];
@@ -353,6 +351,60 @@ fn render_console_login_dialog(f: &mut Frame, app: &App) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan));
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center);
+
+            f.render_widget(paragraph, area);
+        }
+
+        ConsoleLoginState::WaitingForAuth { profile, url, .. } => {
+            // Adjust height based on whether URL is shown
+            let height = if url.is_some() { 14 } else { 11 };
+            let area = centered_rect(70, height, f.area());
+            f.render_widget(Clear, area);
+
+            let mut text = vec![
+                Line::from(Span::styled(
+                    "<Waiting for Console Authentication>",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Complete authentication in your browser.",
+                    Style::default().fg(Color::White),
+                )),
+                Line::from(""),
+            ];
+
+            // Display URL if available (like SSO does)
+            if let Some(ref login_url) = url {
+                text.push(Line::from(Span::styled(
+                    "If browser didn't open, visit:",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                text.push(Line::from(Span::styled(
+                    login_url.as_str(),
+                    Style::default().fg(Color::Blue),
+                )));
+                text.push(Line::from(""));
+            }
+
+            text.push(Line::from(Span::styled(
+                format!("Profile: {}", profile),
+                Style::default().fg(Color::DarkGray),
+            )));
+            text.push(Line::from(Span::styled(
+                "Waiting... (Press Esc to cancel)",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
 
             let paragraph = Paragraph::new(text)
                 .block(block)
@@ -390,7 +442,7 @@ fn render_console_login_dialog(f: &mut Frame, app: &App) {
             f.render_widget(paragraph, area);
         }
 
-        ConsoleLoginState::Failed { error } => {
+        ConsoleLoginState::Failed { error, .. } => {
             let area = centered_rect(70, 11, f.area());
             f.render_widget(Clear, area);
 

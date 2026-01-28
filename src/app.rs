@@ -186,6 +186,12 @@ pub struct App {
     // Console login state (aws login)
     pub console_login_state: Option<ConsoleLoginState>,
 
+    // Console login child process (not in ConsoleLoginState because Child is not Clone)
+    pub console_login_child: Option<std::process::Child>,
+
+    // Console login URL receiver (for capturing URL from subprocess stderr)
+    pub console_login_rx: Option<std::sync::mpsc::Receiver<crate::aws::console_login::LoginInfo>>,
+
     // Pagination state
     pub pagination: PaginationState,
 
@@ -265,10 +271,17 @@ pub enum ConsoleLoginState {
         profile: String,
         login_session: String,
     },
+    /// Waiting for browser auth (subprocess running)
+    WaitingForAuth {
+        profile: String,
+        login_session: String,
+        /// URL captured from subprocess output (displayed in dialog)
+        url: Option<String>,
+    },
     /// Login succeeded - contains profile to switch to
     Success { profile: String },
     /// Login failed
-    Failed { error: String },
+    Failed { profile: String, error: String },
 }
 
 /// Result of profile switch attempt
@@ -375,6 +388,8 @@ impl App {
             endpoint_url,
             sso_state: None,
             console_login_state: None,
+            console_login_child: None,
+            console_login_rx: None,
             pagination: PaginationState::default(),
             log_tail_state: None,
             ssm_connect_request: None,

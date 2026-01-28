@@ -948,8 +948,7 @@ fn render_sso_standalone(f: &mut ratatui::Frame, sso_state: &SsoLoginState) {
     }
 }
 
-/// Handle console login flow (aws login command)
-/// This is simpler than SSO - we just prompt the user to run the command externally
+/// Handle console login flow (aws login command via subprocess)
 #[allow(clippy::too_many_arguments)]
 async fn handle_console_login_flow<B: Backend>(
     terminal: &mut Terminal<B>,
@@ -966,6 +965,7 @@ where
     B::Error: Send + Sync + 'static,
 {
     use app::ConsoleLoginState;
+    use aws::console_login;
 
     tracing::info!(
         "Entering console login flow for profile '{}', session '{}'",
@@ -977,6 +977,8 @@ where
         profile: profile.clone(),
         login_session: login_session.clone(),
     };
+    let mut child_process: Option<std::process::Child> = None;
+    let mut login_rx: Option<std::sync::mpsc::Receiver<console_login::LoginInfo>> = None;
 
     loop {
         // Render console login dialog
@@ -984,38 +986,101 @@ where
             render_console_login_standalone(f, &console_state);
         })?;
 
+        // Poll child process status if waiting
+        if let ConsoleLoginState::WaitingForAuth {
+            profile: waiting_profile,
+            login_session: waiting_login_session,
+            url: current_url,
+        } = &console_state
+        {
+            // Check for URL updates from the receiver
+            if let Some(ref rx) = login_rx {
+                if let Ok(info) = rx.try_recv() {
+                    if info.url.is_some() {
+                        console_state = ConsoleLoginState::WaitingForAuth {
+                            profile: waiting_profile.clone(),
+                            login_session: waiting_login_session.clone(),
+                            url: info.url,
+                        };
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(ref mut child) = child_process {
+                match console_login::check_login_status(child) {
+                    Ok(Some(true)) => {
+                        // Success!
+                        child_process = None;
+                        login_rx = None;
+                        console_state = ConsoleLoginState::Success {
+                            profile: waiting_profile.clone(),
+                        };
+                        continue;
+                    }
+                    Ok(Some(false)) => {
+                        // Failed - get error message from stderr
+                        let error = console_login::read_child_stderr(child)
+                            .unwrap_or_else(|| "aws login command failed".to_string());
+                        child_process = None;
+                        login_rx = None;
+                        console_state = ConsoleLoginState::Failed {
+                            profile: waiting_profile.clone(),
+                            error,
+                        };
+                        continue;
+                    }
+                    Ok(None) => {
+                        // Still running - preserve current URL state
+                        let _ = current_url; // Suppress unused warning
+                    }
+                    Err(e) => {
+                        child_process = None;
+                        login_rx = None;
+                        console_state = ConsoleLoginState::Failed {
+                            profile: waiting_profile.clone(),
+                            error: format!("Error checking login status: {}", e),
+                        };
+                        continue;
+                    }
+                }
+            }
+        }
+
         // Handle input
         if poll(Duration::from_millis(100))? {
             if let Event::Key(key) = read()? {
                 match &console_state {
                     ConsoleLoginState::Prompt {
                         profile: prompt_profile,
-                        ..
+                        login_session: prompt_login_session,
                     } => {
                         match key.code {
                             KeyCode::Enter => {
-                                // User pressed Enter - try to load credentials again
-                                let profile_clone = prompt_profile.clone();
+                                // Check if AWS CLI supports `aws login`
+                                if !console_login::is_aws_login_available() {
+                                    console_state = ConsoleLoginState::Failed {
+                                        profile: prompt_profile.clone(),
+                                        error: "AWS CLI v2.32.0+ required for 'aws login' command. Please upgrade your AWS CLI.".to_string(),
+                                    };
+                                    continue;
+                                }
 
-                                let result = tokio::task::spawn_blocking(move || {
-                                    aws::credentials::load_credentials(&profile_clone)
-                                })
-                                .await?;
-
-                                match result {
-                                    Ok(_) => {
-                                        // Credentials loaded successfully
-                                        console_state = ConsoleLoginState::Success {
+                                // Spawn `aws login` subprocess
+                                match console_login::spawn_aws_login(prompt_profile, &region) {
+                                    Ok((child, rx)) => {
+                                        child_process = Some(child);
+                                        login_rx = Some(rx);
+                                        console_state = ConsoleLoginState::WaitingForAuth {
                                             profile: prompt_profile.clone(),
+                                            login_session: prompt_login_session.clone(),
+                                            url: None,
                                         };
                                     }
                                     Err(e) => {
-                                        // Still failed
                                         console_state = ConsoleLoginState::Failed {
-                                            error: format!(
-                                                "Still unable to load credentials: {}",
-                                                e
-                                            ),
+                                            profile: prompt_profile.clone(),
+                                            error: format!("Failed to spawn aws login: {}", e),
                                         };
                                     }
                                 }
@@ -1027,6 +1092,26 @@ where
                                 return Ok(None);
                             }
                             _ => {}
+                        }
+                    }
+                    ConsoleLoginState::WaitingForAuth { .. } => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                // Kill the subprocess and cancel
+                                if let Some(mut child) = child_process.take() {
+                                    let _ = child.kill();
+                                }
+                                return Ok(None);
+                            }
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(mut child) = child_process.take() {
+                                    let _ = child.kill();
+                                }
+                                return Ok(None);
+                            }
+                            _ => {
+                                // Continue waiting
+                            }
                         }
                     }
                     ConsoleLoginState::Success { .. } => {
@@ -1149,36 +1234,86 @@ fn render_console_login_standalone(f: &mut ratatui::Frame, console_state: &app::
                 Line::from(Span::styled(
                     "<Console Login Required>",
                     Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("Profile '{}' requires AWS Console login.", profile),
+                    Style::default().fg(Color::White),
+                )),
+                Line::from(Span::styled(
+                    format!("Session: {}", login_session),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press Enter to open browser for login",
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(Span::styled(
+                    "(requires AWS CLI v2.32.0+)",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center);
+            f.render_widget(paragraph, dialog_area);
+        }
+
+        ConsoleLoginState::WaitingForAuth { profile, url, .. } => {
+            // Adjust height based on whether URL is shown
+            let height = if url.is_some() { 14 } else { 11 };
+            let dialog_area = centered_rect(70, height, area);
+            f.render_widget(Clear, dialog_area);
+
+            let mut text = vec![
+                Line::from(Span::styled(
+                    "<Waiting for Console Authentication>",
+                    Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("Profile '{}' requires console login.", profile),
+                    "Complete authentication in your browser.",
                     Style::default().fg(Color::White),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "Run this command in a separate terminal:",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(Span::styled(
-                    format!("  aws login --profile {}", profile),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Session: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(login_session, Style::default().fg(Color::Blue)),
-                ]),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Press Enter to retry after login, Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
-                )),
             ];
+
+            // Display URL if available (like SSO does)
+            if let Some(ref login_url) = url {
+                text.push(Line::from(Span::styled(
+                    "If browser didn't open, visit:",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                text.push(Line::from(Span::styled(
+                    login_url.as_str(),
+                    Style::default().fg(Color::Blue),
+                )));
+                text.push(Line::from(""));
+            }
+
+            text.push(Line::from(Span::styled(
+                format!("Profile: {}", profile),
+                Style::default().fg(Color::DarkGray),
+            )));
+            text.push(Line::from(Span::styled(
+                "Waiting... (Press Esc to cancel)",
+                Style::default().fg(Color::DarkGray),
+            )));
 
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -1218,7 +1353,7 @@ fn render_console_login_standalone(f: &mut ratatui::Frame, console_state: &app::
             f.render_widget(paragraph, dialog_area);
         }
 
-        ConsoleLoginState::Failed { error } => {
+        ConsoleLoginState::Failed { error, .. } => {
             let dialog_area = centered_rect(70, 9, area);
             f.render_widget(Clear, dialog_area);
 
@@ -1282,6 +1417,11 @@ where
         // Poll SSO if in waiting state
         if app.mode == Mode::SsoLogin {
             event::poll_sso_if_waiting(app).await;
+        }
+
+        // Poll console login subprocess if waiting
+        if app.mode == Mode::ConsoleLogin {
+            event::poll_console_login_if_waiting(app).await;
         }
 
         // Poll for new log events if in log tail mode
