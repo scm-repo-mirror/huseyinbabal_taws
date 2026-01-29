@@ -71,6 +71,14 @@ pub struct SubResourceDef {
     pub shortcut: String,
     pub parent_id_field: String,
     pub filter_param: String,
+    /// Filter type: "scalar" (default) for single-value params (IAM, ELBv2, RDS),
+    /// "ec2_filter" for EC2-style Filter.N.Name/Value params (VPC subnets, security groups)
+    #[serde(default = "default_filter_type")]
+    pub filter_type: String,
+}
+
+fn default_filter_type() -> String {
+    "scalar".to_string()
 }
 
 /// Confirmation config for actions
