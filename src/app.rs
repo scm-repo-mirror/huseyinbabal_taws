@@ -634,7 +634,11 @@ impl App {
                     // Extract parent ID value
                     let parent_id = extract_json_value(&parent.item, &sub.parent_id_field);
                     if parent_id != "-" {
-                        return vec![ResourceFilter::new(&sub.filter_param, vec![parent_id])];
+                        return vec![ResourceFilter::with_type(
+                            &sub.filter_param,
+                            vec![parent_id],
+                            &sub.filter_type,
+                        )];
                     }
                 }
             }

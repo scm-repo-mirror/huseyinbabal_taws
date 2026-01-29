@@ -18,8 +18,8 @@
         { "header": "TENANCY", "json_path": "InstanceTenancy", "width": 12 }
       ],
       "sub_resources": [
-        { "shortcut": "s", "display_name": "Subnets", "resource_key": "subnets", "parent_id_field": "VpcId", "filter_param": "vpc_ids" },
-        { "shortcut": "g", "display_name": "Security Groups", "resource_key": "security-groups", "parent_id_field": "VpcId", "filter_param": "vpc_ids" }
+        { "shortcut": "s", "display_name": "Subnets", "resource_key": "subnets", "parent_id_field": "VpcId", "filter_param": "vpc-id", "filter_type": "ec2_filter" },
+        { "shortcut": "g", "display_name": "Security Groups", "resource_key": "security-groups", "parent_id_field": "VpcId", "filter_param": "vpc-id", "filter_type": "ec2_filter" }
       ],
       "actions": [],
       "api_config": {
